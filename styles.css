@@ -230,3 +230,21 @@ main, .form { max-width: 720px; margin: 0 auto; padding: 14px 12px 120px; }
 .login .card { text-align: left; }
 .login-err { color: var(--bad); font-size: 14px; margin: 10px 0 0; }
 .login-help { font-size: 13px; color: var(--muted); }
+
+/* Borradores incompletos en el inicio */
+.falta { color: var(--warn); font-weight: 600; }
+
+/* Cámara de la app */
+.cam { position: fixed; inset: 0; z-index: 70; background: #000; display: flex; flex-direction: column; }
+.cam video { flex: 1; width: 100%; min-height: 0; object-fit: contain; background: #000; }
+.cam-flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+.cam-flash.on { animation: flash .25s ease-out; }
+@keyframes flash { from { opacity: .8; } to { opacity: 0; } }
+.cam-bar {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px;
+  padding: 16px 20px calc(16px + var(--safe-b)); background: #000;
+}
+.cam-bar .btn { justify-self: start; background: transparent; color: #fff; border-color: rgba(255,255,255,.5); }
+.cam-shot { width: 74px; height: 74px; border-radius: 50%; border: 5px solid #fff; background: rgba(255,255,255,.25); }
+.cam-shot:active { background: #fff; }
+.cam-count { justify-self: end; color: #fff; font-size: 14px; }

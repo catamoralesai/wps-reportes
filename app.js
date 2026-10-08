@@ -3,7 +3,7 @@
 // Todo se guarda primero en el teléfono (IndexedDB), así la app funciona sin internet;
 // sync.js sube los datos a la hoja de Google cuando hay señal.
 
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.4.0';
 const ESTADOS = ['OK', 'Revisar', 'Falla', 'N/A'];
 const FRECUENCIAS = { Mensual: 1, Bimestral: 2, Trimestral: 3, Semestral: 6, Anual: 12 };
 const TIPOS = ['Centrífuga', 'Sumergible', 'Multietapa', 'Periférica', 'Turbina vertical'];
@@ -261,7 +261,7 @@ function photosBlock() {
     </div>`).join('');
   return `${list ? `<div class="photos">${list}</div>` : ''}
     <div class="btn-row">
-      <label class="btn primary">📷 Tomar foto<input type="file" accept="image/*" capture="environment" data-photo hidden></label>
+      <button type="button" class="btn primary" data-act="camera">📷 Tomar foto</button>
       <label class="btn ghost">🖼️ Galería<input type="file" accept="image/*" multiple data-photo hidden></label>
     </div>`;
 }
@@ -364,9 +364,11 @@ function markOk(path) {
   el?.classList.remove('err');
 }
 
+const REQUERIDOS = [['cliente.nombre', 'Cliente'], ['fecha', 'Fecha'], ['cierre.realiza', 'Quien realiza'], ['cierre.recibe', 'Quien recibe'], ['cierre.firmaRecibe', 'Firma de quien recibe']];
+const faltantes = (r) => REQUERIDOS.filter(([p]) => !String(getPath(r, p) || '').trim());
+
 function validate() {
-  const req = [['cliente.nombre', 'Cliente'], ['fecha', 'Fecha'], ['cierre.realiza', 'Quien realiza'], ['cierre.recibe', 'Quien recibe'], ['cierre.firmaRecibe', 'Firma de quien recibe']];
-  const missing = req.filter(([p]) => !String(getPath(R, p) || '').trim());
+  const missing = faltantes(R);
   app.querySelectorAll('.fld.err').forEach((e) => e.classList.remove('err'));
   missing.forEach(([p]) => {
     const el = app.querySelector(`[data-field="${p}"]`) || app.querySelector(`[data-path="${p}"]`)?.closest('.fld');
@@ -455,6 +457,49 @@ async function sharePdf() {
   }
 }
 
+// Cámara propia de la app: el atajo del navegador a veces abre los archivos en vez de la cámara.
+async function openCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) { toast('Este navegador no da acceso a la cámara. Use “Galería”.', 4000); return; }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } } });
+  } catch (err) {
+    console.warn(err);
+    toast(err.name === 'NotAllowedError' ? 'Sin permiso para la cámara. Actívelo en los ajustes de Chrome o use “Galería”.' : 'No se pudo abrir la cámara. Use “Galería”.', 5000);
+    return;
+  }
+  let tomadas = 0;
+  const box = document.createElement('div');
+  box.className = 'cam';
+  box.innerHTML = `<video autoplay playsinline muted></video><div class="cam-flash"></div>
+    <div class="cam-bar"><button class="btn ghost" data-cam="close">Listo</button>
+    <button class="cam-shot" data-cam="shot" aria-label="Tomar foto"></button><span class="cam-count"></span></div>`;
+  const video = box.querySelector('video');
+  video.srcObject = stream;
+  const close = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    box.remove();
+    if (tomadas) { await saveNow(); renderForm(true); toast(`${tomadas} foto${tomadas > 1 ? 's' : ''} agregada${tomadas > 1 ? 's' : ''}`); }
+  };
+  box.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-cam]')?.dataset.cam;
+    if (a === 'close') close();
+    if (a === 'shot' && video.videoWidth) {
+      const s = Math.min(1, 1400 / Math.max(video.videoWidth, video.videoHeight));
+      const w = Math.round(video.videoWidth * s), h = Math.round(video.videoHeight * s);
+      const c = Object.assign(document.createElement('canvas'), { width: w, height: h });
+      c.getContext('2d').drawImage(video, 0, 0, w, h);
+      R.fotos.push({ id: uid(), nota: '', data: c.toDataURL('image/jpeg', 0.72), w, h });
+      tomadas++;
+      box.querySelector('.cam-count').textContent = `${tomadas} foto${tomadas > 1 ? 's' : ''}`;
+      const f = box.querySelector('.cam-flash');
+      f.classList.remove('on'); void f.offsetWidth; f.classList.add('on');
+      scheduleSave();
+    }
+  });
+  document.body.appendChild(box);
+}
+
 async function addPhotos(files) {
   toast('Procesando fotos…');
   for (const f of files) {
@@ -511,7 +556,7 @@ async function renderHome() {
     <section class="card"><div class="card-h"><h2>${ONLINE_MODE ? 'Reportes en este teléfono' : 'Reportes'}</h2></div>
       ${reps.length ? `<ul class="list">${reps.map((r) => `<li><button class="row" data-nav="#/r/${r.id}">
         <div><strong>${r.numero ? `Nº ${r.numero}` : 'Sin número'} · ${esc(r.cliente.nombre || 'Sin cliente')}</strong>
-        <small>${fmtDate(r.fecha)} · ${esc(r.actividad)}${ONLINE_MODE && r.numero ? (r.sync === 'ok' ? ' · ☁︎ en la nube' : ' · ⏳ por subir') : ''}</small></div>${badge(r.estado)}</button></li>`).join('')}</ul>`
+        <small>${fmtDate(r.fecha)} · ${esc(r.actividad)}${r.estado === 'borrador' && faltantes(r).length ? `<br><span class="falta">Falta: ${faltantes(r).map((f) => f[1].toLowerCase()).join(', ')}</span>` : ''}${ONLINE_MODE && r.numero ? (r.sync === 'ok' ? ' · ☁︎ en la nube' : ' · ⏳ por subir') : ''}</small></div>${badge(r.estado)}</button></li>`).join('')}</ul>`
         : '<p class="empty">Aún no hay reportes. Toca “Nuevo reporte” para empezar.</p>'}
     </section>
     ${ONLINE_MODE && esOficina() ? '<section class="card"><div class="card-h"><h2>Todos los reportes (en línea)</h2></div><div id="remotos"><p class="empty">Cargando…</p></div></section>' : ''}
@@ -845,6 +890,9 @@ app.addEventListener('click', async (e) => {
       if (!isBlank(R[sec].bombas[i]) && !confirm(`¿Quitar la bomba #${i + 1}?`)) return;
       R[sec].bombas.splice(i, 1);
       await saveNow(); renderForm(true);
+      break;
+    case 'camera':
+      openCamera();
       break;
     case 'delphoto':
       if (!confirm('¿Quitar esta foto?')) return;
