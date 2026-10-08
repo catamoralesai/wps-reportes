@@ -2,7 +2,7 @@
 // Reportes de mantenimiento · Water Proof System SAS
 // Todo se guarda en el teléfono (IndexedDB), así la app funciona sin internet.
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0';
 const ESTADOS = ['OK', 'Revisar', 'Falla', 'N/A'];
 const FRECUENCIAS = { Mensual: 1, Bimestral: 2, Trimestral: 3, Semestral: 6, Anual: 12 };
 const TIPOS = ['Centrífuga', 'Sumergible', 'Multietapa', 'Periférica', 'Turbina vertical'];
@@ -107,26 +107,49 @@ function newReport(s) {
   };
 }
 
-// Guarda los equipos del cliente para precargarlos en la próxima visita.
+// ---------- Clientes ----------
+// Un mismo NIT puede tener varias sedes (ej. bloques de un edificio), así que
+// el cliente se identifica por `key` y el NIT solo sirve para buscar.
+const nitBase = (nit) => String(nit || '').split('-')[0].replace(/\D/g, '');
+const clientByName = (n) => CLIENTES.find((c) => clientKey(c.nombre) === clientKey(n));
+function clientsByNit(nit) {
+  const raw = String(nit || '').replace(/\D/g, '');
+  const base = nitBase(nit);
+  if (base.length < 6) return [];
+  return CLIENTES.filter((c) => {
+    const cb = nitBase(c.nit);
+    return cb && (cb === base || cb === raw || String(c.nit).replace(/\D/g, '') === raw);
+  });
+}
+const sortClients = (list) => list.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+const loadClients = async () => { CLIENTES = sortClients(await idb.all('clientes')); };
+
+// Actualiza la ficha del cliente y guarda sus equipos para precargarlos en la próxima visita.
 async function saveClient(r) {
-  const key = clientKey(r.cliente.nombre);
-  if (!key) return;
+  if (!r.cliente.nombre.trim()) return;
+  await loadClients();
+  const prev = CLIENTES.find((c) => c.key === r.cliente.id) || clientByName(r.cliente.nombre);
   const tpl = (b) => ({ marca: b.marca, modelo: b.modelo, tipo: b.tipo, _prev: { voltaje: b.voltaje, amperaje: b.amperaje } });
-  await idb.put('clientes', {
-    key, ...r.cliente,
-    ultimaVisita: r.fecha, ultimoNumero: r.numero, frecuencia: r.cierre.frecuencia,
+  const c = {
+    ...(prev || { key: uid(), creado: Date.now() }),
+    nombre: r.cliente.nombre.trim(), nit: r.cliente.nit.trim(), direccion: r.cliente.direccion.trim(), correo: r.cliente.correo.trim(),
+    frecuencia: r.cierre.frecuencia || prev?.frecuencia || '',
+    ultimaVisita: r.fecha, ultimoNumero: r.numero, actualizado: Date.now(),
     potable: r.potable.aplica ? r.potable.bombas.map(tpl) : null,
     eyectoras: r.eyectoras.aplica ? r.eyectoras.bombas.map(tpl) : null,
     rci: r.rci.aplica ? { principal: tpl(r.rci.principal), jockey: tpl(r.rci.jockey) } : null,
-  });
+  };
+  await idb.put('clientes', c);
+  r.cliente.id = c.key;
+  await loadClients();
 }
 
+// Llena los datos del cliente elegido. Devuelve true si también cargó los equipos de la última visita.
 function applyClient(c) {
-  R.cliente.nombre = c.nombre;
-  for (const k of ['nit', 'direccion', 'correo']) if (!R.cliente[k]) R.cliente[k] = c[k] || '';
+  Object.assign(R.cliente, { id: c.key, nombre: c.nombre, nit: c.nit || '', direccion: c.direccion || '', correo: c.correo || '' });
   if (!R.cierre.frecuencia) R.cierre.frecuencia = c.frecuencia || '';
   const untouched = [...R.potable.bombas, ...R.eyectoras.bombas, R.rci.principal, R.rci.jockey].every(isBlank);
-  if (!untouched) return false;
+  if (!c.ultimaVisita || !untouched) return false;
   const fromTpl = (empty, t) => ({ ...empty, marca: t.marca, modelo: t.modelo, tipo: t.tipo, _prev: t._prev });
   R.potable.aplica = !!c.potable;
   if (c.potable?.length) R.potable.bombas = c.potable.map((t) => fromTpl(emptyPump('potable'), t));
@@ -292,9 +315,9 @@ function renderForm(keepScroll) {
   <form class="form" onsubmit="return false">
     ${r.numero ? '' : '<div class="note">El número del reporte se asigna al finalizar. Todo se guarda solo en el teléfono, aunque no haya señal.</div>'}
     ${section('general', 'Datos generales', `<div class="grid2">
-      ${field('Cliente', 'cliente.nombre', { list: 'dl-clientes', full: true, placeholder: 'Ej: Reserva de Mazurén' })}
-      ${field('NIT', 'cliente.nit', { inputmode: 'numeric' })}
+      ${field('NIT', 'cliente.nit', { list: 'dl-nits', placeholder: 'Escriba el NIT' })}
       ${field('Fecha', 'fecha', { type: 'date' })}
+      ${field('Cliente', 'cliente.nombre', { list: 'dl-clientes', full: true, placeholder: 'O busque por nombre' })}
       ${field('Dirección', 'cliente.direccion', { full: true })}
       ${field('Correo del cliente', 'cliente.correo', { type: 'email', inputmode: 'email', full: true })}
       ${field('Actividad realizada', 'actividad', { list: 'dl-actividades', full: true })}
@@ -323,7 +346,8 @@ function renderForm(keepScroll) {
   </div></div>
   <datalist id="dl-tipos">${TIPOS.map((t) => `<option value="${t}">`).join('')}</datalist>
   <datalist id="dl-actividades">${ACTIVIDADES.map((t) => `<option value="${t}">`).join('')}</datalist>
-  <datalist id="dl-clientes">${CLIENTES.map((c) => `<option value="${esc(c.nombre)}">`).join('')}</datalist>`;
+  <datalist id="dl-clientes">${CLIENTES.map((c) => `<option value="${esc(c.nombre)}">${esc(c.nit || '')}</option>`).join('')}</datalist>
+  <datalist id="dl-nits">${CLIENTES.filter((c) => c.nit).map((c) => `<option value="${esc(c.nit)}">${esc(c.nombre)}</option>`).join('')}</datalist>`;
 
   app.querySelectorAll('canvas[data-sig]').forEach((c) => {
     const p = c.dataset.sig;
@@ -364,9 +388,8 @@ async function finalize() {
     await saveSettings(s);
     R.estado = 'finalizado';
   }
-  await saveNow();
   await saveClient(R);
-  CLIENTES = await idb.all('clientes');
+  await saveNow();
   renderForm(true);
   openSendSheet();
 }
@@ -473,6 +496,7 @@ async function renderHome() {
   </header>
   <main>
     <button class="btn primary big" data-act="new">+ Nuevo reporte</button>
+    <button class="btn block" data-nav="#/clientes" style="margin-bottom:14px">Clientes (${clientes.length})</button>
     ${installPrompt ? '<button class="btn block" data-act="install" style="margin-bottom:14px">Instalar app en el teléfono</button>' : ''}
     ${proximos.length ? `<section class="card"><div class="card-h"><h2>Próximos mantenimientos</h2></div><ul class="list">
       ${proximos.map((c) => `<li><div class="row"><div><strong>${esc(c.nombre)}</strong><small>${c.frecuencia} · última visita ${fmtDate(c.ultimaVisita)}</small></div>
@@ -485,6 +509,78 @@ async function renderHome() {
         : '<p class="empty">Aún no hay reportes. Toca “Nuevo reporte” para empezar.</p>'}
     </section>
   </main>`;
+}
+
+// ---------- Vista: clientes ----------
+async function renderClients() {
+  await loadClients();
+  app.innerHTML = `
+  <header class="topbar">
+    <button class="icon-btn" data-nav="#" aria-label="Volver">←</button>
+    <div class="tb-title">Clientes<small>${CLIENTES.length} registrados</small></div>
+    <button class="icon-btn" data-nav="#/clientes/nuevo" aria-label="Nuevo cliente">+</button>
+  </header>
+  <main>
+    <label class="fld" style="margin-bottom:14px"><input type="search" id="qClientes" placeholder="Buscar por nombre, NIT o dirección" autocomplete="off"></label>
+    <section class="card">
+      ${CLIENTES.length ? `<ul class="list" id="listaClientes">${CLIENTES.map((c) => `<li data-q="${esc(clientKey([c.nombre, c.nit, nitBase(c.nit), c.direccion].join(' ')))}">
+        <button class="row" data-nav="#/clientes/${encodeURIComponent(c.key)}"><div><strong>${esc(c.nombre)}</strong>
+        <small>NIT ${esc(c.nit || '—')} · ${esc(c.direccion || 'Sin dirección')}</small></div>
+        ${c.ultimaVisita ? `<small>${fmtDate(c.ultimaVisita)}</small>` : ''}</button></li>`).join('')}</ul>`
+        : '<p class="empty">Aún no hay clientes. Toca + para agregar uno.</p>'}
+    </section>
+  </main>`;
+  const q = document.getElementById('qClientes');
+  q.addEventListener('input', () => {
+    const t = clientKey(q.value);
+    app.querySelectorAll('#listaClientes li').forEach((li) => li.classList.toggle('hidden', !!t && !li.dataset.q.includes(t)));
+  });
+}
+
+async function renderClientEdit(key) {
+  await loadClients();
+  const nuevo = key === 'nuevo';
+  const c = nuevo ? { key: uid(), nombre: '', nit: '', direccion: '', correo: '', frecuencia: '', creado: Date.now() } : CLIENTES.find((x) => x.key === key);
+  if (!c) { location.hash = '#/clientes'; return; }
+  const equipos = [c.potable && `${c.potable.length} bombas de agua potable`, c.eyectoras && `${c.eyectoras.length} eyectoras`, c.rci && 'sistema RCI'].filter(Boolean);
+  const inp = (label, k, o = {}) => `<label class="fld${o.full ? ' full' : ''}"><span>${label}</span><input data-c="${k}" value="${esc(c[k] || '')}" ${o.attrs || ''} autocomplete="off"></label>`;
+  app.innerHTML = `
+  <header class="topbar">
+    <button class="icon-btn" data-nav="#/clientes" aria-label="Volver">←</button>
+    <div class="tb-title">${nuevo ? 'Nuevo cliente' : esc(c.nombre)}<small>${c.ultimaVisita ? `Última visita ${fmtDate(c.ultimaVisita)} · Nº ${c.ultimoNumero}` : 'Sin visitas registradas'}</small></div>
+  </header>
+  <main>
+    <section class="card"><div class="card-b"><div class="grid2">
+      ${inp('Nombre o razón social', 'nombre', { full: true })}
+      ${inp('NIT', 'nit', { attrs: 'placeholder="900.000.000-0"' })}
+      <label class="fld"><span>Frecuencia</span><select data-c="frecuencia">${['', ...Object.keys(FRECUENCIAS)].map((f) => `<option value="${f}" ${f === c.frecuencia ? 'selected' : ''}>${f || 'Sin definir'}</option>`).join('')}</select></label>
+      ${inp('Dirección', 'direccion', { full: true })}
+      ${inp('Correo para enviar reportes', 'correo', { full: true, attrs: 'type="email" inputmode="email"' })}
+    </div>
+    ${equipos.length ? `<p class="note" style="margin:14px 0 0">Equipos de la última visita: ${equipos.join(', ')}. Se precargan en el próximo reporte.</p>` : ''}
+    </div></section>
+    <div class="btn-row">
+      <button class="btn primary" id="guardarCliente">Guardar</button>
+      ${nuevo ? '' : '<button class="btn danger" id="borrarCliente">Eliminar</button>'}
+    </div>
+  </main>`;
+  document.getElementById('guardarCliente').onclick = async () => {
+    app.querySelectorAll('[data-c]').forEach((el) => { c[el.dataset.c] = el.value.trim(); });
+    if (!c.nombre) { toast('Falta el nombre del cliente'); return; }
+    const dup = CLIENTES.find((x) => x.key !== c.key && clientKey(x.nombre) === clientKey(c.nombre));
+    if (dup) { toast(`Ya existe un cliente llamado ${dup.nombre}`); return; }
+    const mismoNit = c.nit && CLIENTES.filter((x) => x.key !== c.key && nitBase(x.nit) === nitBase(c.nit));
+    c.actualizado = Date.now();
+    await idb.put('clientes', c);
+    toast(mismoNit?.length ? `Guardado. Este NIT también es de: ${mismoNit.map((x) => x.nombre).join(', ')}` : 'Cliente guardado ✓', 3500);
+    location.hash = '#/clientes';
+  };
+  const del = document.getElementById('borrarCliente');
+  if (del) del.onclick = async () => {
+    if (!confirm(`¿Eliminar a ${c.nombre}? Sus reportes no se borran.`)) return;
+    await idb.del('clientes', c.key);
+    location.hash = '#/clientes';
+  };
 }
 
 // ---------- Vista: ajustes ----------
@@ -509,7 +605,7 @@ async function renderSettings() {
       <p class="note warn">En esta versión de prueba los reportes viven solo en este teléfono. Haz un respaldo cada semana y envíatelo por correo o WhatsApp.</p>
       <div class="btn-row">
         <button class="btn primary" data-act="backup">Exportar respaldo</button>
-        <label class="btn ghost">Restaurar<input type="file" accept="application/json,.json" data-restore hidden></label>
+        <label class="btn ghost">Cargar archivo<input type="file" accept="application/json,.json" data-restore hidden></label>
       </div>
     </div></section>
   </main>`;
@@ -540,17 +636,78 @@ async function restoreBackup(file) {
   try {
     const data = JSON.parse(await file.text());
     if (data.app !== 'wps-reportes') throw new Error('archivo no válido');
-    if (!confirm(`Restaurar ${data.reportes.length} reportes y ${data.clientes.length} clientes? Los reportes con el mismo ID se reemplazan.`)) return;
-    for (const r of data.reportes) await idb.put('reportes', r);
-    for (const c of data.clientes) await idb.put('clientes', c);
-    const s = await getSettings();
-    s.siguienteNumero = Math.max(Number(s.siguienteNumero), Number(data.settings?.siguienteNumero) || 0);
-    await saveSettings(s);
-    toast('Respaldo restaurado ✓');
-    renderSettings();
+    const reportes = data.reportes || [], clientes = data.clientes || [];
+    if (!confirm(`¿Cargar ${reportes.length} reportes y ${clientes.length} clientes? Los que ya existan se reemplazan.`)) return;
+    for (const r of reportes) await idb.put('reportes', r);
+    for (const c of clientes) await idb.put('clientes', c);
+    if (data.settings) {
+      const s = await getSettings();
+      s.siguienteNumero = Math.max(Number(s.siguienteNumero), Number(data.settings.siguienteNumero) || 0);
+      await saveSettings(s);
+    }
+    toast('Datos cargados ✓');
+    route();
   } catch (err) {
-    toast(`No se pudo restaurar: ${err.message}`);
+    toast(`No se pudo cargar: ${err.message}`);
   }
+}
+
+// Al escribir o elegir un NIT o un nombre, busca el cliente y llena sus datos.
+async function handleClientField(path, value) {
+  if (path === 'cliente.nombre') {
+    const c = clientByName(value);
+    if (c) return pickClient(c);
+    const cur = CLIENTES.find((x) => x.key === R.cliente.id);
+    if (cur && clientKey(cur.nombre) !== clientKey(value)) R.cliente.id = '';
+    return;
+  }
+  const matches = clientsByNit(value);
+  const cur = CLIENTES.find((x) => x.key === R.cliente.id);
+  if (cur && !matches.includes(cur)) {
+    // El NIT ya no es del cliente que se había llenado solo: se limpian sus datos.
+    Object.assign(R.cliente, { id: '', nombre: '', direccion: '', correo: '' });
+    syncInputs();
+    scheduleSave();
+  }
+  if (matches.length === 1) return pickClient(matches[0]);
+  if (matches.length > 1 && !matches.some((c) => c.key === R.cliente.id)) openClientPicker(matches);
+}
+
+async function pickClient(c) {
+  if (c.key === R.cliente.id) return;
+  const equipos = applyClient(c);
+  await saveNow();
+  if (equipos) renderForm(true);
+  else syncInputs();
+  toast(equipos ? `${c.nombre}: cargamos los equipos de la visita del ${fmtDate(c.ultimaVisita)}` : `Cliente: ${c.nombre}`);
+}
+
+// Refresca los campos visibles sin redibujar el formulario (no cierra el teclado).
+function syncInputs() {
+  app.querySelectorAll('[data-path]').forEach((el) => {
+    if (el.type === 'checkbox' || el === document.activeElement) return;
+    const v = getPath(R, el.dataset.path) ?? '';
+    if (el.value !== v) el.value = v;
+    if (v) markOk(el.dataset.path);
+  });
+}
+
+function openClientPicker(list) {
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet">
+    <h3>Este NIT tiene ${list.length} sedes</h3>
+    <p>¿En cuál está haciendo el mantenimiento?</p>
+    ${list.map((c) => `<button class="btn ghost pick" data-key="${c.key}"><span><strong>${esc(c.nombre)}</strong><small>${esc(c.direccion || '')}</small></span></button>`).join('')}
+    <button class="btn ghost" data-close>Ninguna, es un cliente nuevo</button>
+  </div>`;
+  bg.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-key],[data-close]');
+    if (e.target !== bg && !b) return;
+    bg.remove();
+    if (b?.dataset.key) pickClient(CLIENTES.find((c) => c.key === b.dataset.key));
+  });
+  document.body.appendChild(bg);
 }
 
 // ---------- Eventos ----------
@@ -566,20 +723,17 @@ app.addEventListener('input', (e) => {
   }
   if (el.value) markOk(path);
   scheduleSave();
+  // Elegir una sugerencia de la lista no trae inputType: se busca el cliente de una vez.
+  if ((path === 'cliente.nombre' || path === 'cliente.nit') && (!e.inputType || e.inputType === 'insertReplacementText')) {
+    handleClientField(path, el.value);
+  }
 });
 
 app.addEventListener('change', async (e) => {
   const el = e.target;
   if (el.matches('[data-photo]') && el.files.length) return addPhotos([...el.files]);
   if (el.matches('[data-restore]') && el.files[0]) return restoreBackup(el.files[0]);
-  if (R && el.dataset.path === 'cliente.nombre') {
-    const c = CLIENTES.find((x) => x.key === clientKey(el.value));
-    if (!c) return;
-    const equipos = applyClient(c);
-    await saveNow();
-    renderForm(true);
-    toast(equipos ? `Cargamos los equipos de la visita del ${fmtDate(c.ultimaVisita)}` : 'Datos del cliente cargados');
-  }
+  if (R && (el.dataset.path === 'cliente.nombre' || el.dataset.path === 'cliente.nit')) handleClientField(el.dataset.path, el.value);
 });
 
 app.addEventListener('click', async (e) => {
@@ -643,7 +797,7 @@ app.addEventListener('click', async (e) => {
       location.hash = '#';
       break;
     case 'finalize':
-      if (R.numero) { await saveNow(); await saveClient(R); openSendSheet(); } else finalize();
+      if (R.numero) { await saveClient(R); await saveNow(); openSendSheet(); } else finalize();
       break;
     case 'download':
       await saveNow();
@@ -662,8 +816,14 @@ async function route() {
   if (h.startsWith('#/r/')) {
     R = await idb.get('reportes', h.slice(4));
     if (!R) { location.hash = '#'; return; }
-    CLIENTES = await idb.all('clientes');
+    await loadClients();
     renderForm();
+  } else if (h === '#/clientes') {
+    R = null;
+    renderClients();
+  } else if (h.startsWith('#/clientes/')) {
+    R = null;
+    renderClientEdit(decodeURIComponent(h.slice(11)));
   } else if (h === '#/ajustes') {
     R = null;
     renderSettings();
@@ -677,7 +837,7 @@ window.addEventListener('hashchange', route);
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   installPrompt = e;
-  if (!R && !location.hash.startsWith('#/ajustes')) renderHome();
+  if (!location.hash || location.hash === '#') renderHome();
 });
 
 (async function init() {

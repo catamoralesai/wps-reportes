@@ -206,3 +206,8 @@ main, .form { max-width: 720px; margin: 0 auto; padding: 14px 12px 120px; }
 @media (max-width: 360px) {
   .grid2 { grid-template-columns: 1fr; }
 }
+
+/* Selector de sede cuando un NIT tiene varias */
+.btn.pick { justify-content: flex-start; text-align: left; min-height: 58px; }
+.btn.pick span { display: flex; flex-direction: column; }
+.btn.pick small { font-weight: 400; color: var(--muted); }
