@@ -1,8 +1,9 @@
 'use strict';
 // Reportes de mantenimiento · Water Proof System SAS
-// Todo se guarda en el teléfono (IndexedDB), así la app funciona sin internet.
+// Todo se guarda primero en el teléfono (IndexedDB), así la app funciona sin internet;
+// sync.js sube los datos a la hoja de Google cuando hay señal.
 
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.3.0';
 const ESTADOS = ['OK', 'Revisar', 'Falla', 'N/A'];
 const FRECUENCIAS = { Mensual: 1, Bimestral: 2, Trimestral: 3, Semestral: 6, Anual: 12 };
 const TIPOS = ['Centrífuga', 'Sumergible', 'Multietapa', 'Periférica', 'Turbina vertical'];
@@ -134,7 +135,7 @@ async function saveClient(r) {
     ...(prev || { key: uid(), creado: Date.now() }),
     nombre: r.cliente.nombre.trim(), nit: r.cliente.nit.trim(), direccion: r.cliente.direccion.trim(), correo: r.cliente.correo.trim(),
     frecuencia: r.cierre.frecuencia || prev?.frecuencia || '',
-    ultimaVisita: r.fecha, ultimoNumero: r.numero, actualizado: Date.now(),
+    ultimaVisita: r.fecha, ultimoNumero: r.numero, actualizado: Date.now(), sync: 'pendiente',
     potable: r.potable.aplica ? r.potable.bombas.map(tpl) : null,
     eyectoras: r.eyectoras.aplica ? r.eyectoras.bombas.map(tpl) : null,
     rci: r.rci.aplica ? { principal: tpl(r.rci.principal), jockey: tpl(r.rci.jockey) } : null,
@@ -176,9 +177,11 @@ async function saveNow() {
   saveTimer = null;
   if (!R) return;
   R.actualizado = Date.now();
+  if (R.numero) R.sync = 'pendiente';
   await idb.put('reportes', R);
   const ind = document.getElementById('saveInd');
   if (ind) ind.textContent = 'Guardado ✓';
+  if (R.numero) scheduleSync();
 }
 const flushSave = () => (saveTimer ? saveNow() : Promise.resolve());
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSave(); });
@@ -313,7 +316,7 @@ function renderForm(keepScroll) {
     <span class="save-ind" id="saveInd">Guardado ✓</span>
   </header>
   <form class="form" onsubmit="return false">
-    ${r.numero ? '' : '<div class="note">El número del reporte se asigna al finalizar. Todo se guarda solo en el teléfono, aunque no haya señal.</div>'}
+    ${r.numero ? '' : `<div class="note">El número del reporte se asigna al finalizar. ${ONLINE_MODE ? 'Se guarda en el teléfono aunque no haya señal y se sube a la nube al finalizar.' : 'Todo se guarda solo en el teléfono, aunque no haya señal.'}</div>`}
     ${section('general', 'Datos generales', `<div class="grid2">
       ${field('NIT', 'cliente.nit', { list: 'dl-nits', placeholder: 'Escriba el NIT' })}
       ${field('Fecha', 'fecha', { type: 'date' })}
@@ -382,10 +385,12 @@ async function finalize() {
     return;
   }
   if (!R.numero) {
-    const s = await getSettings();
-    R.numero = Number(s.siguienteNumero);
-    s.siguienteNumero = R.numero + 1;
-    await saveSettings(s);
+    const n = await takeNumber();
+    if (!n) {
+      toast('No hay números de reporte disponibles en este teléfono. Conéctese a internet un momento e intente de nuevo.', 5000);
+      return;
+    }
+    R.numero = n;
     R.estado = 'finalizado';
   }
   await saveClient(R);
@@ -495,6 +500,7 @@ async function renderHome() {
     <button class="icon-btn" data-nav="#/ajustes" aria-label="Ajustes">⚙︎</button>
   </header>
   <main>
+    <div id="syncSlot">${await syncChip()}</div>
     <button class="btn primary big" data-act="new">+ Nuevo reporte</button>
     <button class="btn block" data-nav="#/clientes" style="margin-bottom:14px">Clientes (${clientes.length})</button>
     ${installPrompt ? '<button class="btn block" data-act="install" style="margin-bottom:14px">Instalar app en el teléfono</button>' : ''}
@@ -502,13 +508,63 @@ async function renderHome() {
       ${proximos.map((c) => `<li><div class="row"><div><strong>${esc(c.nombre)}</strong><small>${c.frecuencia} · última visita ${fmtDate(c.ultimaVisita)}</small></div>
         <span class="badge ${c.proxima < hoy ? 'vencido' : 'pronto'}">${c.proxima < hoy ? 'Vencido' : fmtDate(c.proxima)}</span></div></li>`).join('')}
     </ul></section>` : ''}
-    <section class="card"><div class="card-h"><h2>Reportes</h2></div>
+    <section class="card"><div class="card-h"><h2>${ONLINE_MODE ? 'Reportes en este teléfono' : 'Reportes'}</h2></div>
       ${reps.length ? `<ul class="list">${reps.map((r) => `<li><button class="row" data-nav="#/r/${r.id}">
         <div><strong>${r.numero ? `Nº ${r.numero}` : 'Sin número'} · ${esc(r.cliente.nombre || 'Sin cliente')}</strong>
-        <small>${fmtDate(r.fecha)} · ${esc(r.actividad)}</small></div>${badge(r.estado)}</button></li>`).join('')}</ul>`
+        <small>${fmtDate(r.fecha)} · ${esc(r.actividad)}${ONLINE_MODE && r.numero ? (r.sync === 'ok' ? ' · ☁︎ en la nube' : ' · ⏳ por subir') : ''}</small></div>${badge(r.estado)}</button></li>`).join('')}</ul>`
         : '<p class="empty">Aún no hay reportes. Toca “Nuevo reporte” para empezar.</p>'}
     </section>
+    ${ONLINE_MODE && esOficina() ? '<section class="card"><div class="card-h"><h2>Todos los reportes (en línea)</h2></div><div id="remotos"><p class="empty">Cargando…</p></div></section>' : ''}
   </main>`;
+  if (ONLINE_MODE && esOficina()) loadRemoteReports();
+}
+
+// Lista para la oficina: todos los reportes subidos por cualquier persona.
+async function loadRemoteReports() {
+  const box = document.getElementById('remotos');
+  try {
+    const list = await api('reportes');
+    if (!document.body.contains(box)) return;
+    box.innerHTML = list.length ? `<ul class="list">${list.map((r) => `<li><div class="row">
+      <div><strong>Nº ${r.numero} · ${esc(r.cliente)}</strong><small>${fmtDate(r.fecha)} · ${esc(r.realiza)}</small></div>
+      ${r.pdf ? `<a class="btn ghost" style="min-height:38px;padding:0 12px" href="${esc(r.pdf)}" target="_blank" rel="noopener">PDF</a>` : ''}</div></li>`).join('')}</ul>`
+      : '<p class="empty">Aún no hay reportes en la nube.</p>';
+  } catch (err) {
+    if (document.body.contains(box)) box.innerHTML = `<p class="empty">${navigator.onLine ? 'No se pudo cargar: ' + esc(err.message) : 'Sin internet. Se mostrarán cuando haya señal.'}</p>`;
+  }
+}
+
+// ---------- Vista: inicio de sesión ----------
+function renderLogin(msg = '') {
+  app.innerHTML = `
+  <main class="login">
+    <img src="icons/logo.png" alt="Water Proof System SAS">
+    <h1>Reportes de mantenimiento</h1>
+    <p>Water Proof System SAS</p>
+    <form id="loginForm" class="card"><div class="card-b">
+      <label class="fld"><span>Código de acceso</span><input id="codigo" autocomplete="off" autocapitalize="off" placeholder="wps-xxxxxxxx"></label>
+      ${msg ? `<p class="login-err">${esc(msg)}</p>` : ''}
+      <button class="btn primary block" style="margin-top:12px">Entrar</button>
+    </div></form>
+    <p class="login-help">Si no tiene código, pídaselo a la oficina.</p>
+  </main>`;
+  document.getElementById('loginForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const code = document.getElementById('codigo').value;
+    if (!code.trim()) return;
+    if (!navigator.onLine) return renderLogin('Necesita internet para entrar la primera vez.');
+    const btn = e.target.querySelector('button');
+    btn.disabled = true; btn.textContent = 'Verificando…';
+    try {
+      await login(code);
+      location.hash = '#';
+      await route();
+      toast(`Hola, ${SESION.nombre.split(' ')[0]}`);
+      syncAll();
+    } catch (err) {
+      renderLogin(err.message);
+    }
+  };
 }
 
 // ---------- Vista: clientes ----------
@@ -561,7 +617,7 @@ async function renderClientEdit(key) {
     </div></section>
     <div class="btn-row">
       <button class="btn primary" id="guardarCliente">Guardar</button>
-      ${nuevo ? '' : '<button class="btn danger" id="borrarCliente">Eliminar</button>'}
+      ${nuevo || !esOficina() ? '' : '<button class="btn danger" id="borrarCliente">Eliminar</button>'}
     </div>
   </main>`;
   document.getElementById('guardarCliente').onclick = async () => {
@@ -571,14 +627,16 @@ async function renderClientEdit(key) {
     if (dup) { toast(`Ya existe un cliente llamado ${dup.nombre}`); return; }
     const mismoNit = c.nit && CLIENTES.filter((x) => x.key !== c.key && nitBase(x.nit) === nitBase(c.nit));
     c.actualizado = Date.now();
+    c.sync = 'pendiente';
     await idb.put('clientes', c);
+    scheduleSync(500);
     toast(mismoNit?.length ? `Guardado. Este NIT también es de: ${mismoNit.map((x) => x.nombre).join(', ')}` : 'Cliente guardado ✓', 3500);
     location.hash = '#/clientes';
   };
   const del = document.getElementById('borrarCliente');
   if (del) del.onclick = async () => {
     if (!confirm(`¿Eliminar a ${c.nombre}? Sus reportes no se borran.`)) return;
-    await idb.del('clientes', c.key);
+    await deleteClient(c.key);
     location.hash = '#/clientes';
   };
 }
@@ -586,23 +644,30 @@ async function renderClientEdit(key) {
 // ---------- Vista: ajustes ----------
 async function renderSettings() {
   const s = await getSettings();
+  const pool = s.pool || [];
   app.innerHTML = `
   <header class="topbar">
     <button class="icon-btn" data-nav="#" aria-label="Volver">←</button>
     <div class="tb-title">Ajustes<small>Versión ${APP_VERSION}</small></div>
   </header>
   <main>
+    ${ONLINE_MODE ? `<section class="card"><div class="card-h"><h2>Cuenta</h2></div><div class="card-b">
+      <p style="margin:0 0 6px"><strong>${esc(SESION.nombre)}</strong> · ${esc(SESION.rol)}</p>
+      <p style="margin:0 0 12px;color:var(--muted);font-size:14px">Números de reporte reservados en este teléfono: ${pool.length ? `${pool[0]}–${pool[pool.length - 1]} (${pool.length})` : 'ninguno (se reservan al tener señal)'}</p>
+      <div id="syncSlot">${await syncChip()}</div>
+      <button class="btn ghost block" data-act="logout">Cerrar sesión</button>
+    </div></section>` : ''}
     <section class="card"><div class="card-h"><h2>Operario</h2></div><div class="card-b">
       <div class="grid2">
         <label class="fld full"><span>Nombre del operario</span><input data-set="operario" value="${esc(s.operario)}"></label>
-        <label class="fld full"><span>Siguiente número de reporte</span><input data-set="siguienteNumero" inputmode="numeric" value="${esc(s.siguienteNumero)}"></label>
+        ${ONLINE_MODE ? '' : `<label class="fld full"><span>Siguiente número de reporte</span><input data-set="siguienteNumero" inputmode="numeric" value="${esc(s.siguienteNumero)}"></label>`}
       </div>
       <div class="fld full" style="margin-top:10px"><span>Firma del operario (se usa en todos los reportes)</span>
         <div class="sig"><canvas id="sigTec"></canvas><div class="sig-hint">Firme aquí con el dedo</div>
         <button type="button" class="link" data-act="clearsigtec">Borrar</button></div></div>
     </div></section>
     <section class="card"><div class="card-h"><h2>Respaldo</h2></div><div class="card-b">
-      <p class="note warn">En esta versión de prueba los reportes viven solo en este teléfono. Haz un respaldo cada semana y envíatelo por correo o WhatsApp.</p>
+      <p class="note ${ONLINE_MODE ? '' : 'warn'}">${ONLINE_MODE ? 'Los reportes finalizados y los clientes se guardan en la hoja de Google. El respaldo es opcional.' : 'Los reportes viven solo en este teléfono. Haz un respaldo cada semana y envíatelo por correo o WhatsApp.'}</p>
       <div class="btn-row">
         <button class="btn primary" data-act="backup">Exportar respaldo</button>
         <label class="btn ghost">Cargar archivo<input type="file" accept="application/json,.json" data-restore hidden></label>
@@ -806,6 +871,16 @@ app.addEventListener('click', async (e) => {
     case 'backup':
       exportBackup();
       break;
+    case 'sync':
+      syncAll({ avisar: true });
+      break;
+    case 'logout': {
+      const n = (await pendingReports()).length;
+      if (!confirm(n ? `Hay ${n} reporte(s) sin subir. Si cierra sesión no se subirán hasta que vuelva a entrar. ¿Cerrar sesión?` : '¿Cerrar sesión en este teléfono?')) return;
+      await logout();
+      route();
+      break;
+    }
   }
 });
 
@@ -813,7 +888,10 @@ app.addEventListener('click', async (e) => {
 async function route() {
   await flushSave();
   const h = location.hash;
-  if (h.startsWith('#/r/')) {
+  if (ONLINE_MODE && !SESION) {
+    R = null;
+    renderLogin();
+  } else if (h.startsWith('#/r/')) {
     R = await idb.get('reportes', h.slice(4));
     if (!R) { location.hash = '#'; return; }
     await loadClients();
@@ -837,7 +915,7 @@ window.addEventListener('hashchange', route);
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   installPrompt = e;
-  if (!location.hash || location.hash === '#') renderHome();
+  if ((!location.hash || location.hash === '#') && (!ONLINE_MODE || SESION)) renderHome();
 });
 
 (async function init() {
@@ -848,5 +926,7 @@ window.addEventListener('beforeinstallprompt', (e) => {
     const blob = await (await fetch('icons/logo.png')).blob();
     LOGO = await new Promise((res) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(blob); });
   } catch { /* el PDF sale sin logo */ }
-  route();
+  if (ONLINE_MODE) await loadSesion();
+  await route();
+  syncAll();
 })();

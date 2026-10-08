@@ -1,10 +1,12 @@
 // Service worker: guarda la app en el teléfono para que abra sin internet.
 // Al publicar cambios, subir la versión de CACHE para forzar la actualización.
-const CACHE = 'wps-reportes-v0.2.0';
+const CACHE = 'wps-reportes-v0.3.0';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
+  './config.js',
+  './sync.js',
   './app.js',
   './pdf.js',
   './jspdf.umd.min.js',
