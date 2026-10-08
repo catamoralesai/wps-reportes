@@ -3,7 +3,7 @@
 // Todo se guarda primero en el teléfono (IndexedDB), así la app funciona sin internet;
 // sync.js sube los datos a la hoja de Google cuando hay señal.
 
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.5.0';
 const ESTADOS = ['OK', 'Revisar', 'Falla', 'N/A'];
 const FRECUENCIAS = { Mensual: 1, Bimestral: 2, Trimestral: 3, Semestral: 6, Anual: 12 };
 const TIPOS = ['Centrífuga', 'Sumergible', 'Multietapa', 'Periférica', 'Turbina vertical'];
@@ -966,8 +966,31 @@ window.addEventListener('beforeinstallprompt', (e) => {
   if ((!location.hash || location.hash === '#') && (!ONLINE_MODE || SESION)) renderHome();
 });
 
+// Si el diseño no se aplicó (p. ej. el teléfono tenía una copia vieja o dañada),
+// se descarga de nuevo y se inserta directamente en la página.
+async function ensureStyles() {
+  const ok = () => getComputedStyle(document.body).backgroundColor === 'rgb(243, 246, 251)';
+  if (ok()) return;
+  try {
+    const css = await (await fetch(`styles.css?r=${Date.now()}`, { cache: 'no-store' })).text();
+    if (!ok() && css.includes(':root')) document.head.appendChild(Object.assign(document.createElement('style'), { textContent: css }));
+  } catch (err) { console.warn('No se pudo recargar el diseño', err); }
+}
+
 (async function init() {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(console.error);
+  if ('serviceWorker' in navigator) {
+    // Cuando se publica una versión nueva, recargar una vez para no mezclar archivos viejos y nuevos.
+    const habiaVersion = !!navigator.serviceWorker.controller;
+    let recargando = false;
+    navigator.serviceWorker.addEventListener('controllerchange', async () => {
+      if (!habiaVersion || recargando) return;
+      recargando = true;
+      await flushSave();
+      location.reload();
+    });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(console.error);
+  }
+  ensureStyles();
   // Pide al navegador no borrar los datos guardados por falta de espacio.
   navigator.storage?.persist?.().catch(() => {});
   try {
