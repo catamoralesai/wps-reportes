@@ -16,6 +16,7 @@ const COLS = {
   Clientes: ['id', 'nombre', 'nit', 'direccion', 'correo', 'frecuencia', 'ultima_visita', 'ultimo_numero', 'actualizado', 'equipos'],
   Usuarios: ['nombre', 'codigo', 'rol', 'activo'],
   Config: ['clave', 'valor'],
+  Sugerencias: ['id', 'fecha', 'nombre', 'rol', 'sugerencia', 'pantalla', 'version', 'estado'],
 };
 const ROLES_OFICINA = ['admin', 'oficina'];
 
@@ -155,6 +156,18 @@ const ACCIONES = {
     return { pdf: pdfUrl, carpeta: folder.getUrl(), fotos: fotos };
   }),
 
+  // Ideas de mejora escritas desde la app. Se ignoran repetidas (mismo id).
+  sugerencia: (req, user) => withLock(() => {
+    const texto = String(req.texto || '').trim().slice(0, 3000);
+    if (!texto) throw new Error('La sugerencia está vacía');
+    const sh = ensureSheet('Sugerencias');
+    if (req.id && readAll('Sugerencias').some((x) => x.id === req.id)) return true;
+    const fila = [req.id || Utilities.getUuid(), req.fecha || new Date().toISOString(), user.nombre, user.rol, texto,
+      req.pantalla || '', req.version || '', 'Nueva'];
+    sh.getRange(sh.getLastRow() + 1, 1, 1, fila.length).setValues([fila]);
+    return true;
+  }),
+
   reportes: () => readAll('Reportes')
     .map((r) => ({ id: r.id, numero: Number(r.numero), fecha: r.fecha, cliente: r.cliente, nit: r.nit, estado: r.estado,
       realiza: r.realiza, pdf: r.pdf, carpeta: r.carpeta }))
@@ -169,6 +182,17 @@ function json(obj) {
 
 function sheet(name) {
   return SpreadsheetApp.getActive().getSheetByName(name);
+}
+
+// Crea la pestaña con sus encabezados si todavía no existe.
+function ensureSheet(name) {
+  const existing = sheet(name);
+  if (existing) return existing;
+  const sh = SpreadsheetApp.getActive().insertSheet(name);
+  sh.getRange('A:Z').setNumberFormat('@');
+  sh.getRange(1, 1, 1, COLS[name].length).setValues([COLS[name]]).setFontWeight('bold').setBackground('#dde7f4');
+  sh.setFrozenRows(1);
+  return sh;
 }
 
 function readAll(name) {

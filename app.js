@@ -3,7 +3,7 @@
 // Todo se guarda primero en el teléfono (IndexedDB), así la app funciona sin internet;
 // sync.js sube los datos a la hoja de Google cuando hay señal.
 
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.8.0';
 const ESTADOS = ['OK', 'Revisar', 'Falla', 'N/A'];
 const FRECUENCIAS = { Mensual: 1, Bimestral: 2, Trimestral: 3, Semestral: 6, Anual: 12 };
 const TIPOS = ['Centrífuga', 'Sumergible', 'Multietapa', 'Periférica', 'Turbina vertical'];
@@ -605,7 +605,10 @@ async function renderHome() {
   <main>
     <div id="syncSlot">${await syncChip()}</div>
     <button class="btn primary big" data-act="new">+ Nuevo reporte</button>
-    <button class="btn block" data-nav="#/clientes" style="margin-bottom:14px">Clientes (${clientes.length})</button>
+    <div class="btn-row" style="margin-bottom:14px">
+      <button class="btn" data-nav="#/clientes">Clientes (${clientes.length})</button>
+      ${ONLINE_MODE ? '<button class="btn ghost" data-act="sugerencia">💡 Sugerencia</button>' : ''}
+    </div>
     ${installPrompt ? '<button class="btn block" data-act="install" style="margin-bottom:14px">Instalar app en el teléfono</button>' : ''}
     ${proximos.length ? `<section class="card"><div class="card-h"><h2>Próximos mantenimientos</h2></div><ul class="list">
       ${proximos.map((c) => `<li><div class="row"><div><strong>${esc(c.nombre)}</strong><small>${c.frecuencia} · última visita ${fmtDate(c.ultimaVisita)}</small></div>
@@ -668,6 +671,32 @@ function renderLogin(msg = '') {
       renderLogin(err.message);
     }
   };
+}
+
+// ---------- Sugerencias ----------
+function openSuggestion() {
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet">
+    <h3>💡 ¿Qué mejorarías de la app?</h3>
+    <p>Cuéntanos qué te costó trabajo, qué falta o qué cambiarías. También puedes dictarlo con el micrófono del teclado.</p>
+    <label class="fld"><textarea id="sugTexto" rows="5" placeholder="Ej: Sería útil poder copiar los datos de una bomba de la visita anterior…"></textarea></label>
+    <button class="btn primary" data-g="send">Enviar sugerencia</button>
+    <button class="btn ghost" data-g="close">Cancelar</button>
+  </div>`;
+  bg.addEventListener('click', async (e) => {
+    const a = e.target.closest('[data-g]')?.dataset.g;
+    if (e.target === bg || a === 'close') bg.remove();
+    if (a === 'send') {
+      const texto = bg.querySelector('#sugTexto').value.trim();
+      if (!texto) { toast('Escribe tu sugerencia primero'); return; }
+      await addSuggestion(texto);
+      bg.remove();
+      toast(navigator.onLine ? '¡Gracias! Sugerencia enviada' : '¡Gracias! Se enviará cuando haya señal', 3500);
+    }
+  });
+  document.body.appendChild(bg);
+  setTimeout(() => bg.querySelector('#sugTexto').focus(), 50);
 }
 
 // ---------- Vista: clientes ----------
@@ -978,6 +1007,9 @@ app.addEventListener('click', async (e) => {
       break;
     case 'backup':
       exportBackup();
+      break;
+    case 'sugerencia':
+      openSuggestion();
       break;
     case 'sync':
       syncAll({ avisar: true });

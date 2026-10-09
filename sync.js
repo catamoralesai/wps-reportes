@@ -185,6 +185,23 @@ async function deleteClient(key) {
   scheduleSync();
 }
 
+// ---------- Sugerencias ----------
+async function addSuggestion(texto) {
+  const lista = (await idb.get('kv', 'sugerencias')) || [];
+  lista.push({ id: uid(), texto, fecha: new Date().toISOString(), pantalla: location.hash || '#inicio', version: APP_VERSION });
+  await idb.put('kv', lista, 'sugerencias');
+  scheduleSync(300);
+}
+
+async function pushSuggestions() {
+  const lista = (await idb.get('kv', 'sugerencias')) || [];
+  for (const s of lista) {
+    await api('sugerencia', s);
+    const resto = ((await idb.get('kv', 'sugerencias')) || []).filter((x) => x.id !== s.id);
+    await idb.put('kv', resto, 'sugerencias');
+  }
+}
+
 // ---------- Ciclo de sincronización ----------
 async function syncAll({ avisar = false } = {}) {
   if (!ONLINE_MODE || !SESION || syncState.corriendo) return;
@@ -193,6 +210,7 @@ async function syncAll({ avisar = false } = {}) {
   updateSyncUi();
   try {
     await pushClients();
+    await pushSuggestions();
     for (const r of await pendingReports()) await pushReport(r);
     await pullClients();
     await loadClients();
