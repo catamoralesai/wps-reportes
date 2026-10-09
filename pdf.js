@@ -171,13 +171,14 @@ function buildReportPdf(r, logoDataUrl) {
   y += sigH + 12;
 
   // Registro fotográfico
-  if (r.fotos.length) {
+  const fotos = r.fotos.filter((f) => f.data);
+  if (fotos.length) {
     ensure(90);
     title('REGISTRO FOTOGRÁFICO');
     y += 4;
     const colW = (CW - 6) / 2, maxH = 72;
-    for (let i = 0; i < r.fotos.length; i += 2) {
-      const pair = r.fotos.slice(i, i + 2);
+    for (let i = 0; i < fotos.length; i += 2) {
+      const pair = fotos.slice(i, i + 2);
       const dims = pair.map((f) => {
         const s = Math.min(colW / f.w, maxH / f.h);
         return { w: f.w * s, h: f.h * s };

@@ -129,11 +129,15 @@ function reportForServer(r) {
   return c;
 }
 
+// Si el reporte ya está archivado (fotos solo en Drive), no se regenera el PDF:
+// el servidor conserva el que ya tiene.
+const fotosArchivadas = (r) => r.fotos.some((f) => !f.data);
+
 async function pushReport(r) {
-  const pdf = await toBase64(buildReportPdf(r, LOGO));
+  const pdf = fotosArchivadas(r) ? '' : await toBase64(buildReportPdf(r, LOGO));
   const fotos = r.fotos
     .map((f, i) => ({ f, i }))
-    .filter(({ f }) => !f.driveId)
+    .filter(({ f }) => !f.driveId && f.data)
     .map(({ f, i }) => ({ id: f.id, nota: f.nota, nombre: `foto-${r.numero}-${i + 1}.jpg`, data: f.data.split(',')[1] }));
   const out = await api('guardarReporte', { reporte: reportForServer(r), pdf, pdfNombre: pdfName(r), fotos });
 
@@ -196,6 +200,7 @@ async function syncAll({ avisar = false } = {}) {
     await refillPool();
     syncState.error = '';
     syncState.ultimo = Date.now();
+    await archivarFotosViejas();
     if (avisar) toast('Todo sincronizado ✓');
   } catch (err) {
     console.error(err);
@@ -205,6 +210,20 @@ async function syncAll({ avisar = false } = {}) {
   } finally {
     syncState.corriendo = false;
     updateSyncUi();
+  }
+}
+
+// Libera espacio en el teléfono: las fotos de reportes que ya están en la nube y
+// llevan más de 30 días sin cambios se borran del teléfono (siguen en Drive).
+const DIAS_ARCHIVO = 30;
+async function archivarFotosViejas() {
+  const limite = Date.now() - DIAS_ARCHIVO * 86400000;
+  for (const r of await idb.all('reportes')) {
+    if (r.sync !== 'ok' || !r.numero || r.actualizado > limite) continue;
+    if (!r.fotos.some((f) => f.data && f.driveId)) continue;
+    if (R && R.id === r.id) continue;
+    r.fotos = r.fotos.map((f) => (f.data && f.driveId ? { ...f, data: '' } : f));
+    await idb.put('reportes', r);
   }
 }
 

@@ -269,3 +269,4 @@ main, .form { max-width: 720px; margin: 0 auto; padding: 14px 12px 120px; }
 .sigpad-line { position: absolute; left: 8%; right: 8%; bottom: 28%; border-bottom: 1.5px solid #c3cddd; pointer-events: none; }
 .sigpad-bar { display: grid; grid-template-columns: 1fr 1fr 1.4fr; gap: 8px; padding: 10px 14px calc(14px + var(--safe-b)); }
 .btn.sig-btn { color: var(--blue); }
+.photo-drive { display: grid; place-items: center; aspect-ratio: 4/3; background: var(--blue-soft); color: var(--blue); font-weight: 600; text-decoration: none; }

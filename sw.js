@@ -2,7 +2,7 @@
 // Con señal siempre pide la versión más reciente (y la guarda); sin señal, o si
 // la red no responde a tiempo, usa la copia guardada. Así no se mezclan versiones.
 // Al publicar cambios, subir la versión de CACHE.
-const CACHE = 'wps-reportes-v0.6.0';
+const CACHE = 'wps-reportes-v0.7.0';
 const ASSETS = [
   './',
   './index.html',

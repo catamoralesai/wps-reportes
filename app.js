@@ -3,11 +3,13 @@
 // Todo se guarda primero en el teléfono (IndexedDB), así la app funciona sin internet;
 // sync.js sube los datos a la hoja de Google cuando hay señal.
 
-const APP_VERSION = '0.6.0';
+const APP_VERSION = '0.7.0';
 const ESTADOS = ['OK', 'Revisar', 'Falla', 'N/A'];
 const FRECUENCIAS = { Mensual: 1, Bimestral: 2, Trimestral: 3, Semestral: 6, Anual: 12 };
 const TIPOS = ['Centrífuga', 'Sumergible', 'Multietapa', 'Periférica', 'Turbina vertical'];
 const ACTIVIDADES = ['Mantenimiento preventivo', 'Mantenimiento correctivo', 'Instalación', 'Diagnóstico', 'Visita técnica'];
+// Fotos: lado largo máximo y calidad JPEG (2000 px ≈ 4 MP, legible para placas de datos).
+const FOTO_MAX = 2000, FOTO_CALIDAD = 0.8;
 const DEFAULT_SETTINGS = { operario: '', siguienteNumero: 1445, firmaTecnico: '' };
 
 const app = document.getElementById('app');
@@ -262,7 +264,8 @@ function rciBlock(key, label) {
 
 function photosBlock() {
   const list = R.fotos.map((f, i) => `<div class="photo">
-      <img src="${f.data}" alt="Foto ${i + 1}">
+      ${f.data ? `<img src="${f.data}" alt="Foto ${i + 1}">`
+        : `<a class="photo-drive" href="https://drive.google.com/file/d/${esc(f.driveId)}/view" target="_blank" rel="noopener">☁︎ Ver en Drive</a>`}
       <input data-path="fotos.${i}.nota" value="${esc(f.nota)}" placeholder="Descripción (opcional)">
       <button type="button" class="link danger" data-act="delphoto" data-i="${i}">Quitar</button>
     </div>`).join('');
@@ -471,12 +474,22 @@ function openSendSheet() {
 
 const makePdf = () => buildReportPdf(R, LOGO);
 
+// Reporte archivado: sus fotos ya solo están en Drive, así que se usa el PDF guardado allá.
+function abrirPdfArchivado() {
+  if (!fotosArchivadas(R)) return false;
+  if (R.pdfUrl) { window.open(R.pdfUrl, '_blank'); toast('Reporte archivado: se abre el PDF guardado en Drive'); }
+  else toast('Las fotos de este reporte ya solo están en Drive');
+  return true;
+}
+
 function downloadPdf() {
+  if (abrirPdfArchivado()) return;
   try { downloadBlob(makePdf(), pdfName(R)); }
   catch (err) { console.error(err); toast('No se pudo generar el PDF'); }
 }
 
 async function sharePdf() {
+  if (abrirPdfArchivado()) return;
   let blob;
   try { blob = makePdf(); } catch (err) { console.error(err); toast('No se pudo generar el PDF'); return; }
   const file = new File([blob], pdfName(R), { type: 'application/pdf' });
@@ -530,11 +543,11 @@ async function openCamera() {
     const a = e.target.closest('[data-cam]')?.dataset.cam;
     if (a === 'close') close();
     if (a === 'shot' && video.videoWidth) {
-      const s = Math.min(1, 1400 / Math.max(video.videoWidth, video.videoHeight));
+      const s = Math.min(1, FOTO_MAX / Math.max(video.videoWidth, video.videoHeight));
       const w = Math.round(video.videoWidth * s), h = Math.round(video.videoHeight * s);
       const c = Object.assign(document.createElement('canvas'), { width: w, height: h });
       c.getContext('2d').drawImage(video, 0, 0, w, h);
-      R.fotos.push({ id: uid(), nota: '', data: c.toDataURL('image/jpeg', 0.72), w, h });
+      R.fotos.push({ id: uid(), nota: '', data: c.toDataURL('image/jpeg', FOTO_CALIDAD), w, h });
       tomadas++;
       box.querySelector('.cam-count').textContent = `${tomadas} foto${tomadas > 1 ? 's' : ''}`;
       const f = box.querySelector('.cam-flash');
@@ -555,7 +568,7 @@ async function addPhotos(files) {
   renderForm(true);
 }
 
-function compressImage(file, max = 1400, q = 0.72) {
+function compressImage(file, max = FOTO_MAX, q = FOTO_CALIDAD) {
   return new Promise((res, rej) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
