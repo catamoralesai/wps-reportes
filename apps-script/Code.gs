@@ -106,13 +106,16 @@ const ACCIONES = {
     return true;
   },
 
+  // `serie` cambia cuando la oficina reinicia el consecutivo: los teléfonos descartan sus números reservados.
+  serie: () => getConfig('serie') || '1',
+
   reservarNumeros: (req) => withLock(() => {
     const n = Math.min(Math.max(Number(req.cantidad) || 1, 1), 20);
     const desde = Number(getConfig('siguiente_numero'));
     setConfig('siguiente_numero', String(desde + n));
-    const out = [];
-    for (let i = 0; i < n; i++) out.push(desde + i);
-    return out;
+    const numeros = [];
+    for (let i = 0; i < n; i++) numeros.push(desde + i);
+    return { serie: getConfig('serie') || '1', numeros: numeros };
   }),
 
   guardarReporte: (req, user) => withLock(() => {

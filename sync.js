@@ -6,7 +6,7 @@
 
 const API_URL = (window.WPS_CONFIG && window.WPS_CONFIG.apiUrl) || '';
 const ONLINE_MODE = !!API_URL;
-const POOL_MIN = 3, POOL_SIZE = 10;
+const POOL_MIN = 2, POOL_SIZE = 5;
 let SESION = null;
 const syncState = { corriendo: false, error: '', ultimo: 0 };
 
@@ -59,16 +59,33 @@ async function logout() {
 const esOficina = () => !ONLINE_MODE || (SESION && ['admin', 'oficina'].includes(SESION.rol));
 
 // ---------- Numeración ----------
-// Cada teléfono reserva un bloque de números cuando tiene señal, para poder
-// finalizar reportes sin internet sin repetir números entre personas.
+// Solo los operarios reservan un bloque pequeño de números cuando tienen señal,
+// para poder finalizar sin internet. Oficina y admin toman el número al finalizar.
+// La "serie" de la hoja permite reiniciar el consecutivo: si cambia, se descartan
+// los números que el teléfono tenía reservados.
+const esOperario = () => SESION && SESION.rol === 'operario';
+const leerReserva = (out) => (Array.isArray(out) ? { serie: '1', numeros: out } : { serie: String(out.serie), numeros: out.numeros });
+
+async function checkSerie() {
+  const serie = String(await api('serie'));
+  const s = await getSettings();
+  if (s.poolSerie !== serie) { s.pool = []; s.poolSerie = serie; await saveSettings(s); }
+}
+
 async function refillPool() {
   if (!ONLINE_MODE || !SESION || !navigator.onLine) return;
   const s = await getSettings();
+  if (!esOperario()) {
+    if ((s.pool || []).length) { s.pool = []; await saveSettings(s); }
+    return;
+  }
   const pool = s.pool || [];
   if (pool.length >= POOL_MIN) return;
-  const nums = await api('reservarNumeros', { cantidad: POOL_SIZE - pool.length });
+  const { serie, numeros } = leerReserva(await api('reservarNumeros', { cantidad: POOL_SIZE - pool.length }));
   const s2 = await getSettings();
-  s2.pool = [...(s2.pool || []), ...nums].filter((n, i, a) => a.indexOf(n) === i).sort((a, b) => a - b);
+  const base = s2.poolSerie === serie ? s2.pool || [] : [];
+  s2.pool = [...base, ...numeros].filter((n, i, a) => a.indexOf(n) === i).sort((a, b) => a - b);
+  s2.poolSerie = serie;
   await saveSettings(s2);
 }
 
@@ -80,11 +97,13 @@ async function takeNumber() {
     await saveSettings(s);
     return n;
   }
-  let s = await getSettings();
-  if (!(s.pool || []).length) {
-    try { await refillPool(); } catch (err) { console.warn(err); }
-    s = await getSettings();
+  if (!esOperario() || !(await getSettings()).pool?.length) {
+    // Con señal se pide el número directamente a la hoja.
+    if (navigator.onLine) {
+      try { return leerReserva(await api('reservarNumeros', { cantidad: 1 })).numeros[0]; } catch (err) { console.warn(err); }
+    }
   }
+  const s = await getSettings();
   if (!(s.pool || []).length) return null;
   const n = s.pool.shift();
   await saveSettings(s);
@@ -173,6 +192,7 @@ async function syncAll({ avisar = false } = {}) {
     for (const r of await pendingReports()) await pushReport(r);
     await pullClients();
     await loadClients();
+    try { await checkSerie(); } catch (err) { console.warn(err); }
     await refillPool();
     syncState.error = '';
     syncState.ultimo = Date.now();

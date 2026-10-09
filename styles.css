@@ -248,3 +248,24 @@ main, .form { max-width: 720px; margin: 0 auto; padding: 14px 12px 120px; }
 .cam-shot { width: 74px; height: 74px; border-radius: 50%; border: 5px solid #fff; background: rgba(255,255,255,.25); }
 .cam-shot:active { background: #fff; }
 .cam-count { justify-self: end; color: #fff; font-size: 14px; }
+
+/* Botón de archivo: el input invisible cubre el botón (iOS no abre inputs ocultos con display:none) */
+.file-btn { position: relative; overflow: hidden; }
+.file-hidden { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 0; }
+
+/* Campos obligatorios */
+.req { color: var(--bad); font-weight: 700; }
+
+/* Firma: vista previa y pantalla completa */
+.sig-btn { min-height: 64px; border-style: dashed; color: var(--blue); }
+.sig-prev { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1.5px solid var(--line); border-radius: 12px; padding: 8px 12px; background: #fff; }
+.sig-prev img { max-height: 90px; max-width: 65%; object-fit: contain; }
+.sigpad { position: fixed; inset: 0; z-index: 80; background: #fff; display: flex; flex-direction: column; }
+.sigpad-h { padding: calc(14px + env(safe-area-inset-top, 0px)) 16px 10px; border-bottom: 1px solid var(--line); }
+.sigpad-h strong { display: block; font-size: 18px; color: var(--blue-dark); }
+.sigpad-h span { font-size: 14px; color: var(--muted); }
+.sigpad-area { position: relative; flex: 1; margin: 14px; border: 2px dashed var(--line); border-radius: 14px; background: #fcfdff; }
+.sigpad-area canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.sigpad-line { position: absolute; left: 8%; right: 8%; bottom: 28%; border-bottom: 1.5px solid #c3cddd; pointer-events: none; }
+.sigpad-bar { display: grid; grid-template-columns: 1fr 1fr 1.4fr; gap: 8px; padding: 10px 14px calc(14px + var(--safe-b)); }
+.btn.sig-btn { color: var(--blue); }

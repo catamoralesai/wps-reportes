@@ -3,7 +3,7 @@
 // Todo se guarda primero en el teléfono (IndexedDB), así la app funciona sin internet;
 // sync.js sube los datos a la hoja de Google cuando hay señal.
 
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.6.0';
 const ESTADOS = ['OK', 'Revisar', 'Falla', 'N/A'];
 const FRECUENCIAS = { Mensual: 1, Bimestral: 2, Trimestral: 3, Semestral: 6, Anual: 12 };
 const TIPOS = ['Centrífuga', 'Sumergible', 'Multietapa', 'Periférica', 'Turbina vertical'];
@@ -27,7 +27,11 @@ const idb = (() => {
       db.createObjectStore('clientes', { keyPath: 'key' });
       db.createObjectStore('kv');
     };
-    req.onsuccess = () => res(req.result);
+    req.onsuccess = () => {
+      // Si otra pestaña necesita actualizar o borrar la base, soltarla en vez de bloquearla.
+      req.result.onversionchange = () => { req.result.close(); dbp = null; };
+      res(req.result);
+    };
     req.onerror = () => rej(req.error);
   }));
   const run = async (store, mode, fn) => {
@@ -187,8 +191,11 @@ const flushSave = () => (saveTimer ? saveNow() : Promise.resolve());
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSave(); });
 
 // ---------- Componentes del formulario ----------
+const reqMark = (path) => (REQUERIDOS.some(([p]) => p === path) ? ' <b class="req">*</b>' : '');
+
 function field(label, path, o = {}) {
   const v = getPath(R, path) ?? '';
+  label += reqMark(path);
   const attrs = [
     `data-path="${path}"`,
     o.inputmode ? `inputmode="${o.inputmode}"` : '',
@@ -262,47 +269,68 @@ function photosBlock() {
   return `${list ? `<div class="photos">${list}</div>` : ''}
     <div class="btn-row">
       <button type="button" class="btn primary" data-act="camera">📷 Tomar foto</button>
-      <label class="btn ghost">🖼️ Galería<input type="file" accept="image/*" multiple data-photo hidden></label>
+      <label class="btn ghost file-btn">🖼️ Galería<input type="file" accept="image/*" multiple data-photo class="file-hidden"></label>
     </div>`;
 }
 
-const sigBlock = (label, path) => `<div class="fld full" data-field="${path}"><span>${label}</span>
-  <div class="sig"><canvas data-sig="${path}"></canvas><div class="sig-hint">Firme aquí con el dedo</div>
-  <button type="button" class="link" data-act="clearsig" data-path="${path}">Borrar</button></div></div>`;
+// La firma se hace en una pantalla aparte: así hacer scroll sobre el formulario
+// nunca cuenta como firma, y hay más espacio para firmar.
+function sigBlock(label, path) {
+  const v = getPath(R, path);
+  return `<div class="fld full" data-field="${path}"><span>${label}${reqMark(path)}</span>
+    ${v ? `<div class="sig-prev"><img src="${v}" alt="Firma"><button type="button" class="link" data-act="sign" data-path="${path}" data-label="${esc(label)}">Volver a firmar</button></div>`
+      : `<button type="button" class="btn ghost block sig-btn" data-act="sign" data-path="${path}" data-label="${esc(label)}">✍️ Toque para firmar</button>`}</div>`;
+}
 
-function setupSig(canvas, get, set) {
+const MIN_TRAZO = 60; // px de trazo para considerar que alguien firmó de verdad
+
+function openSignature(titulo, onSave) {
+  const box = document.createElement('div');
+  box.className = 'sigpad';
+  box.innerHTML = `<div class="sigpad-h"><strong>${esc(titulo)}</strong><span>Firme con el dedo dentro del recuadro</span></div>
+    <div class="sigpad-area"><canvas></canvas><div class="sigpad-line"></div></div>
+    <div class="sigpad-bar"><button class="btn ghost" data-s="cancel">Cancelar</button><button class="btn ghost" data-s="clear">Borrar</button><button class="btn primary" data-s="save">Guardar</button></div>`;
+  document.body.appendChild(box);
+  const canvas = box.querySelector('canvas');
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
   const rect = canvas.getBoundingClientRect();
   canvas.width = rect.width * ratio;
   canvas.height = rect.height * ratio;
   const ctx = canvas.getContext('2d');
   ctx.scale(ratio, ratio);
-  Object.assign(ctx, { lineWidth: 2.4, lineCap: 'round', lineJoin: 'round', strokeStyle: '#0b1f44', fillStyle: '#0b1f44' });
-  const box = canvas.parentElement;
-  const existing = get();
-  if (existing) {
-    const img = new Image();
-    img.onload = () => ctx.drawImage(img, 0, 0, rect.width, rect.height);
-    img.src = existing;
-    box.classList.add('signed');
-  }
-  let drawing = false, last = null;
+  Object.assign(ctx, { lineWidth: 2.6, lineCap: 'round', lineJoin: 'round', strokeStyle: '#0b1f44' });
+  let drawing = false, last = null, largo = 0;
+  let caja = null; // rectángulo que ocupa lo firmado, para recortar la imagen
+  const ampliar = (p) => { caja = caja ? { x0: Math.min(caja.x0, p.x), y0: Math.min(caja.y0, p.y), x1: Math.max(caja.x1, p.x), y1: Math.max(caja.y1, p.y) } : { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; };
   const pos = (e) => { const b = canvas.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; };
-  canvas.addEventListener('pointerdown', (e) => {
-    drawing = true; last = pos(e);
-    canvas.setPointerCapture(e.pointerId);
-    ctx.beginPath(); ctx.arc(last.x, last.y, 1.2, 0, Math.PI * 2); ctx.fill();
-    box.classList.add('signed');
-  });
+  canvas.addEventListener('pointerdown', (e) => { drawing = true; last = pos(e); ampliar(last); canvas.setPointerCapture(e.pointerId); });
   canvas.addEventListener('pointermove', (e) => {
     if (!drawing) return;
     const p = pos(e);
     ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+    largo += Math.hypot(p.x - last.x, p.y - last.y);
+    ampliar(p);
     last = p;
   });
-  const end = () => { if (drawing) { drawing = false; set(canvas.toDataURL('image/png')); } };
+  const end = () => { drawing = false; };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
+  box.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-s]')?.dataset.s;
+    if (a === 'cancel') box.remove();
+    if (a === 'clear') { ctx.clearRect(0, 0, rect.width, rect.height); largo = 0; caja = null; }
+    if (a === 'save') {
+      if (largo < MIN_TRAZO) { toast('La firma está vacía o es muy corta. Firme dentro del recuadro.'); return; }
+      // Recortar a lo firmado (con margen) para que la firma se vea grande en el PDF.
+      const m = 12;
+      const x0 = Math.max(0, caja.x0 - m), y0 = Math.max(0, caja.y0 - m);
+      const w = Math.min(rect.width, caja.x1 + m) - x0, h = Math.min(rect.height, caja.y1 + m) - y0;
+      const out = Object.assign(document.createElement('canvas'), { width: Math.round(w * ratio), height: Math.round(h * ratio) });
+      out.getContext('2d').drawImage(canvas, x0 * ratio, y0 * ratio, w * ratio, h * ratio, 0, 0, out.width, out.height);
+      onSave(out.toDataURL('image/png'));
+      box.remove();
+    }
+  });
 }
 
 // ---------- Vista: formulario ----------
@@ -352,10 +380,6 @@ function renderForm(keepScroll) {
   <datalist id="dl-clientes">${CLIENTES.map((c) => `<option value="${esc(c.nombre)}">${esc(c.nit || '')}</option>`).join('')}</datalist>
   <datalist id="dl-nits">${CLIENTES.filter((c) => c.nit).map((c) => `<option value="${esc(c.nit)}">${esc(c.nombre)}</option>`).join('')}</datalist>`;
 
-  app.querySelectorAll('canvas[data-sig]').forEach((c) => {
-    const p = c.dataset.sig;
-    setupSig(c, () => getPath(R, p), (v) => { setPath(R, p, v); markOk(p); scheduleSave(); });
-  });
   window.scrollTo(0, keepScroll ? sy : 0);
 }
 
@@ -364,7 +388,7 @@ function markOk(path) {
   el?.classList.remove('err');
 }
 
-const REQUERIDOS = [['cliente.nombre', 'Cliente'], ['fecha', 'Fecha'], ['cierre.realiza', 'Quien realiza'], ['cierre.recibe', 'Quien recibe'], ['cierre.firmaRecibe', 'Firma de quien recibe']];
+const REQUERIDOS = [['cliente.nombre', 'Cliente'], ['fecha', 'Fecha'], ['cierre.realiza', 'Quien realiza'], ['cierre.recibe', 'Quien recibe'], ['cierre.firmaTecnico', 'Firma de quien realiza'], ['cierre.firmaRecibe', 'Firma de quien recibe']];
 const faltantes = (r) => REQUERIDOS.filter(([p]) => !String(getPath(r, p) || '').trim());
 
 function validate() {
@@ -379,13 +403,14 @@ function validate() {
 
 const pdfName = (r) => `Reporte_${r.numero}_${(r.cliente.nombre || 'cliente').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w]+/g, '_')}.pdf`;
 
-async function finalize() {
+async function finalize(confirmado) {
   const missing = validate();
   if (missing.length) {
     toast(`Falta: ${missing.map((m) => m[1]).join(', ')}`, 4000);
     app.querySelector('.fld.err')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;
   }
+  if (!R.numero && !confirmado) return confirmFinalize();
   if (!R.numero) {
     const n = await takeNumber();
     if (!n) {
@@ -399,6 +424,26 @@ async function finalize() {
   await saveNow();
   renderForm(true);
   openSendSheet();
+}
+
+// Finalizar asigna el número del reporte: se confirma para que no pase por error.
+function confirmFinalize() {
+  const n = R.potable.bombas.length * (R.potable.aplica ? 1 : 0) + R.eyectoras.bombas.length * (R.eyectoras.aplica ? 1 : 0);
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet">
+    <h3>¿Finalizar el reporte?</h3>
+    <p>${esc(R.cliente.nombre)} · ${fmtDate(R.fecha)}<br>${n} bomba${n === 1 ? '' : 's'} · ${R.fotos.length} foto${R.fotos.length === 1 ? '' : 's'} · recibe ${esc(R.cierre.recibe)}</p>
+    <p>Se le asigna el número y deja de ser borrador. Después podrá corregirlo y volver a enviarlo.</p>
+    <button class="btn primary" data-f="ok">Sí, finalizar</button>
+    <button class="btn ghost" data-f="no">Seguir editando</button>
+  </div>`;
+  bg.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-f]')?.dataset.f;
+    if (e.target === bg || a === 'no') bg.remove();
+    if (a === 'ok') { bg.remove(); finalize(true); }
+  });
+  document.body.appendChild(bg);
 }
 
 function openSendSheet() {
@@ -698,7 +743,9 @@ async function renderSettings() {
   <main>
     ${ONLINE_MODE ? `<section class="card"><div class="card-h"><h2>Cuenta</h2></div><div class="card-b">
       <p style="margin:0 0 6px"><strong>${esc(SESION.nombre)}</strong> · ${esc(SESION.rol)}</p>
-      <p style="margin:0 0 12px;color:var(--muted);font-size:14px">Números de reporte reservados en este teléfono: ${pool.length ? `${pool[0]}–${pool[pool.length - 1]} (${pool.length})` : 'ninguno (se reservan al tener señal)'}</p>
+      <p style="margin:0 0 12px;color:var(--muted);font-size:14px">${SESION.rol === 'operario'
+        ? `Números reservados en este teléfono para trabajar sin señal: ${pool.length ? `${pool[0]}–${pool[pool.length - 1]} (${pool.length})` : 'ninguno (se reservan al tener señal)'}`
+        : 'El número del reporte se asigna al finalizar (necesita señal).'}</p>
       <div id="syncSlot">${await syncChip()}</div>
       <button class="btn ghost block" data-act="logout">Cerrar sesión</button>
     </div></section>` : ''}
@@ -708,26 +755,25 @@ async function renderSettings() {
         ${ONLINE_MODE ? '' : `<label class="fld full"><span>Siguiente número de reporte</span><input data-set="siguienteNumero" inputmode="numeric" value="${esc(s.siguienteNumero)}"></label>`}
       </div>
       <div class="fld full" style="margin-top:10px"><span>Firma del operario (se usa en todos los reportes)</span>
-        <div class="sig"><canvas id="sigTec"></canvas><div class="sig-hint">Firme aquí con el dedo</div>
-        <button type="button" class="link" data-act="clearsigtec">Borrar</button></div></div>
+        ${s.firmaTecnico ? `<div class="sig-prev"><img src="${s.firmaTecnico}" alt="Firma"><button type="button" class="link" id="firmarTec">Volver a firmar</button></div>`
+          : '<button type="button" class="btn ghost block sig-btn" id="firmarTec">✍️ Toque para firmar</button>'}</div>
     </div></section>
     <section class="card"><div class="card-h"><h2>Respaldo</h2></div><div class="card-b">
       <p class="note ${ONLINE_MODE ? '' : 'warn'}">${ONLINE_MODE ? 'Los reportes finalizados y los clientes se guardan en la hoja de Google. El respaldo es opcional.' : 'Los reportes viven solo en este teléfono. Haz un respaldo cada semana y envíatelo por correo o WhatsApp.'}</p>
       <div class="btn-row">
         <button class="btn primary" data-act="backup">Exportar respaldo</button>
-        <label class="btn ghost">Cargar archivo<input type="file" accept="application/json,.json" data-restore hidden></label>
+        <label class="btn ghost file-btn">Cargar archivo<input type="file" accept="application/json,.json" data-restore class="file-hidden"></label>
       </div>
     </div></section>
   </main>`;
-  setupSig(document.getElementById('sigTec'), () => s.firmaTecnico, async (v) => { s.firmaTecnico = v; await saveSettings(s); toast('Firma guardada'); });
+  document.getElementById('firmarTec').onclick = () => openSignature('Firma del operario', async (v) => {
+    s.firmaTecnico = v; await saveSettings(s); toast('Firma guardada'); renderSettings();
+  });
   app.querySelectorAll('[data-set]').forEach((el) => el.addEventListener('input', async () => {
     const k = el.dataset.set;
     s[k] = k === 'siguienteNumero' ? Number(el.value.replace(/\D/g, '')) || DEFAULT_SETTINGS.siguienteNumero : el.value;
     await saveSettings(s);
   }));
-  document.getElementById('sigTec').closest('.sig').querySelector('[data-act="clearsigtec"]').onclick = async () => {
-    s.firmaTecnico = ''; await saveSettings(s); renderSettings();
-  };
 }
 
 async function exportBackup() {
@@ -841,8 +887,8 @@ app.addEventListener('input', (e) => {
 
 app.addEventListener('change', async (e) => {
   const el = e.target;
-  if (el.matches('[data-photo]') && el.files.length) return addPhotos([...el.files]);
-  if (el.matches('[data-restore]') && el.files[0]) return restoreBackup(el.files[0]);
+  if (el.matches('[data-photo]') && el.files.length) { const files = [...el.files]; el.value = ''; return addPhotos(files); }
+  if (el.matches('[data-restore]') && el.files[0]) { const f = el.files[0]; el.value = ''; return restoreBackup(f); }
   if (R && (el.dataset.path === 'cliente.nombre' || el.dataset.path === 'cliente.nit')) handleClientField(el.dataset.path, el.value);
 });
 
@@ -899,10 +945,11 @@ app.addEventListener('click', async (e) => {
       R.fotos.splice(i, 1);
       await saveNow(); renderForm(true);
       break;
-    case 'clearsig':
-      setPath(R, btn.dataset.path, '');
-      await saveNow(); renderForm(true);
+    case 'sign': {
+      const path = btn.dataset.path;
+      openSignature(btn.dataset.label, async (v) => { setPath(R, path, v); await saveNow(); renderForm(true); });
       break;
+    }
     case 'delreport':
       if (!confirm('¿Eliminar este borrador? No se puede deshacer.')) return;
       await idb.del('reportes', R.id);
