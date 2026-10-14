@@ -40,6 +40,9 @@
   canvas { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); display: block; }
   details summary { cursor: pointer; color: var(--blue); font-weight: 600; font-size: 14px; }
   .req::after { content: " *"; color: var(--bad); }
+  .hidden { display: none !important; }
+  .acceso { max-width: 380px; margin: 40px auto; }
+  header .salir { margin-left: auto; background: transparent; color: #fff; border-color: rgba(255,255,255,.6); padding: 6px 12px; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -47,11 +50,21 @@
   <img src="../icons/logo.png" alt="">
   <div>
     <h1>Certificados de lavado de tanques</h1>
-    <p>Water Proof System SAS · llena los datos y descarga el PDF</p>
+    <p id="subtitulo">Water Proof System SAS · uso interno</p>
   </div>
+  <button type="button" class="salir hidden" id="btnSalir">Salir</button>
 </header>
 
-<main>
+<form class="card acceso" id="acceso">
+  <h2>Acceso</h2>
+  <p class="hint">Usa el mismo código de acceso de la app de reportes.</p>
+  <label for="codigo">Código de acceso</label>
+  <input id="codigo" type="password" autocomplete="current-password" required>
+  <button class="primary" id="btnEntrar" type="submit">Entrar</button>
+  <p class="msg" id="msgAcceso"></p>
+</form>
+
+<main id="app" class="hidden">
   <section>
     <div class="card">
       <details id="pegar">
@@ -118,6 +131,7 @@ Tipo establecimiento: Residencial"></textarea>
   </section>
 </main>
 
+<script src="../config.js"></script>
 <script src="../jspdf.umd.min.js"></script>
 <script>
 (() => {
@@ -170,13 +184,13 @@ Tipo establecimiento: Residencial"></textarea>
   }
 
   // ---------- Vista previa (canvas) ----------
+  // La plantilla no está en el sitio público: el servidor la entrega solo con un código válido.
   const plantilla = new Image();
-  plantilla.src = 'plantilla.jpg';
   const lienzo = $('lienzo'), ctx = lienzo.getContext('2d');
   const K = lienzo.width / PAGE_W;
 
   function dibujarPrevia() {
-    if (!plantilla.complete) return;
+    if (!plantilla.src || !plantilla.complete) return;
     ctx.drawImage(plantilla, 0, 0, lienzo.width, lienzo.height);
     const v = valores();
     ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -196,6 +210,7 @@ Tipo establecimiento: Residencial"></textarea>
 
   // ---------- PDF ----------
   async function imagenBase() {
+    if (!plantilla.src) throw new Error('Vuelve a entrar con tu código');
     if (!plantilla.complete) await new Promise((r) => (plantilla.onload = () => { dibujarPrevia(); r(); }));
     return plantilla;
   }
@@ -295,7 +310,59 @@ Tipo establecimiento: Residencial"></textarea>
     } finally { btn.disabled = false; }
   });
 
-  reiniciar(false);
+  // ---------- Acceso (mismo código y servidor que la app de reportes) ----------
+  const API_URL = (window.WPS_CONFIG && window.WPS_CONFIG.apiUrl) || '';
+  const LS_COD = 'wps-cert-codigo';
+
+  // Apps Script a veces responde con una página de error: se reintenta hasta 3 veces.
+  async function api(accion, codigo) {
+    for (let intento = 1; ; intento++) {
+      let out;
+      try {
+        const res = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita la verificación CORS previa
+          body: JSON.stringify({ accion, codigo }),
+        });
+        out = JSON.parse(await res.text());
+      } catch (err) {
+        if (intento >= 3) throw new Error('El servidor de Google no respondió bien. Intenta de nuevo.');
+        await new Promise((r) => setTimeout(r, 1500 * intento));
+        continue;
+      }
+      if (!out.ok) throw new Error(out.error || 'Error del servidor');
+      return out.data;
+    }
+  }
+
+  async function entrar(codigo) {
+    const msg = $('msgAcceso'), btn = $('btnEntrar');
+    btn.disabled = true; msg.className = 'msg'; msg.textContent = 'Verificando…';
+    try {
+      const data = await api('plantillaCertificado', codigo);
+      await new Promise((ok, mal) => { plantilla.onload = ok; plantilla.onerror = () => mal(new Error('La plantilla llegó dañada')); plantilla.src = 'data:image/jpeg;base64,' + data.imagen; });
+      lsSet(LS_COD, codigo);
+      $('subtitulo').textContent = `Water Proof System SAS · ${data.nombre}`;
+      $('acceso').classList.add('hidden'); $('app').classList.remove('hidden'); $('btnSalir').classList.remove('hidden');
+      msg.textContent = '';
+      reiniciar(false);
+    } catch (err) {
+      msg.className = 'msg bad'; msg.textContent = err.message;
+      if (/no válido/i.test(err.message)) { try { localStorage.removeItem(LS_COD); } catch {} }
+    } finally { btn.disabled = false; }
+  }
+
+  $('acceso').addEventListener('submit', (e) => { e.preventDefault(); entrar($('codigo').value.trim()); });
+  $('btnSalir').addEventListener('click', () => {
+    try { localStorage.removeItem(LS_COD); } catch {}
+    plantilla.removeAttribute('src');
+    $('codigo').value = '';
+    $('app').classList.add('hidden'); $('btnSalir').classList.add('hidden'); $('acceso').classList.remove('hidden');
+    $('subtitulo').textContent = 'Water Proof System SAS · uso interno';
+  });
+
+  const guardado = lsGet(LS_COD);
+  if (guardado) entrar(guardado);
 })();
 </script>
 </body>

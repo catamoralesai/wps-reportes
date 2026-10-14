@@ -168,6 +168,22 @@ const ACCIONES = {
     return true;
   }),
 
+  // Imagen base del generador de certificados (certificados/ en la app). Vive en Drive, no en el sitio
+  // público, para que solo quien tenga código pueda generar certificados. Se busca por nombre la primera
+  // vez y se guarda su id en Config.
+  plantillaCertificado: (req, user) => {
+    let id = getConfig('plantilla_certificado');
+    let file = null;
+    try { file = id ? DriveApp.getFileById(id) : null; } catch (e) { file = null; }
+    if (!file) {
+      const it = DriveApp.getFilesByName('plantilla-certificado.jpg');
+      if (!it.hasNext()) throw new Error('Falta subir plantilla-certificado.jpg a Google Drive');
+      file = it.next();
+      withLock(() => setConfig('plantilla_certificado', file.getId()));
+    }
+    return { nombre: user.nombre, imagen: Utilities.base64Encode(file.getBlob().getBytes()) };
+  },
+
   reportes: () => readAll('Reportes')
     .map((r) => ({ id: r.id, numero: Number(r.numero), fecha: r.fecha, cliente: r.cliente, nit: r.nit, estado: r.estado,
       realiza: r.realiza, pdf: r.pdf, carpeta: r.carpeta }))
