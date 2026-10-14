@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Certificados WPS</title>
+<link rel="icon" href="../icons/icon-192.png">
+<style>
+  :root {
+    --blue: #1f4e9c; --blue-dark: #163a76; --blue-soft: #e6eefa;
+    --bg: #f3f6fb; --card: #fff; --text: #14213d; --muted: #5d6b82; --line: #d5dde9;
+    --ok: #1a7f4b; --bad: #b42318; --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); font-size: 16px; line-height: 1.4; }
+  header { background: var(--blue); color: #fff; padding: 14px 16px; display: flex; align-items: center; gap: 12px; }
+  header img { width: 40px; height: 40px; border-radius: 50%; background: #fff; }
+  header h1 { font-size: 18px; margin: 0; }
+  header p { margin: 0; font-size: 13px; opacity: .85; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; color: var(--blue-dark); }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input, select, textarea { width: 100%; font: inherit; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--text); }
+  textarea { min-height: 120px; font-size: 14px; font-family: ui-monospace, Menlo, monospace; }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--blue); outline-offset: -1px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row2 label { margin-top: 10px; }
+  button { font: inherit; cursor: pointer; border-radius: 10px; padding: 11px 14px; border: 1px solid var(--blue); }
+  .primary { background: var(--blue); color: #fff; width: 100%; font-weight: 600; margin-top: 16px; }
+  .primary:disabled { opacity: .5; cursor: default; }
+  .ghost { background: #fff; color: var(--blue); }
+  .actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .hint { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+  .msg { font-size: 14px; margin-top: 10px; }
+  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+  .preview { position: sticky; top: 16px; }
+  canvas { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); display: block; }
+  details summary { cursor: pointer; color: var(--blue); font-weight: 600; font-size: 14px; }
+  .req::after { content: " *"; color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <img src="../icons/logo.png" alt="">
+  <div>
+    <h1>Certificados de lavado de tanques</h1>
+    <p>Water Proof System SAS · llena los datos y descarga el PDF</p>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <details id="pegar">
+        <summary>¿Tienes la solicitud en texto? Pégala aquí</summary>
+        <p class="hint">Una línea por dato, con el formato <b>Campo: valor</b>. Ejemplo:</p>
+        <textarea id="texto" placeholder="Razón social: EDIFICIO TRENTO PH
+NIT: 900.752.626-1
+Dirección: CR 51 # 122 - 35
+Fecha: 14/10/2026
+Medidas del tanque: 3 x 2 x 1.5 m
+Volumen: 9 m3
+Tipo establecimiento: Residencial"></textarea>
+        <div class="actions"><button type="button" class="ghost" id="btnPegar">Llenar el formulario con este texto</button></div>
+        <p class="msg" id="msgPegar"></p>
+      </details>
+    </div>
+
+    <form class="card" id="form" autocomplete="off" style="margin-top:16px">
+      <h2>Datos del certificado</h2>
+      <div class="row2">
+        <div><label class="req" for="numero">Número (N°)</label><input id="numero" inputmode="numeric" required></div>
+        <div><label class="req" for="fecha">Fecha del servicio</label><input id="fecha" type="date" required></div>
+      </div>
+      <label class="req" for="concepto">Concepto sanitario</label>
+      <input id="concepto" required>
+
+      <h2 style="margin-top:18px">Cliente</h2>
+      <label class="req" for="razon">Razón social</label>
+      <input id="razon" required placeholder="EDIFICIO TRENTO PH">
+      <div class="row2">
+        <div><label class="req" for="nit">NIT</label><input id="nit" required placeholder="900.752.626-1"></div>
+        <div><label for="tipo">Tipo de establecimiento</label>
+          <input id="tipo" list="tipos" placeholder="Residencial">
+          <datalist id="tipos"><option>Residencial</option><option>Comercial</option><option>Institucional</option><option>Industrial</option><option>Oficinas</option></datalist>
+        </div>
+      </div>
+      <label class="req" for="direccion">Dirección</label>
+      <input id="direccion" required placeholder="CR 51 # 122 - 35">
+
+      <h2 style="margin-top:18px">Servicio y tanque</h2>
+      <label for="servicio">Servicio</label>
+      <input id="servicio">
+      <div class="row2">
+        <div><label for="medidas">Medidas del tanque</label><input id="medidas" placeholder="3 x 2 x 1.5 m"></div>
+        <div><label for="volumen">Volumen del tanque</label><input id="volumen" placeholder="9 m³"></div>
+      </div>
+      <div class="row2">
+        <div><label for="proximo">Fecha próximo lavado</label><input id="proximo" type="date"></div>
+        <div><label for="producto">Producto y dosificación</label><input id="producto"></div>
+      </div>
+      <p class="hint">El próximo lavado se calcula a 6 meses de la fecha; puedes cambiarlo.</p>
+
+      <button class="primary" id="btnPdf" type="submit">Descargar PDF</button>
+      <div class="actions">
+        <button type="button" class="ghost" id="btnNuevo">Nuevo certificado (siguiente número)</button>
+      </div>
+      <p class="msg" id="msg"></p>
+    </form>
+  </section>
+
+  <section class="card preview">
+    <h2>Vista previa</h2>
+    <canvas id="lienzo" width="1333" height="750"></canvas>
+  </section>
+</main>
+
+<script src="../jspdf.umd.min.js"></script>
+<script>
+(() => {
+  // Página = tamaño del certificado original (pt). La plantilla es la imagen sin los datos variables.
+  const PAGE_W = 2000.25, PAGE_H = 1125;
+  const DEFAULTS = {
+    concepto: 'SQ07C-006057 DEL 11-02-2026',
+    servicio: 'Lavado y desinfección',
+    producto: 'NaClO5%, 5PPM',
+  };
+
+  // Celdas en pt (x0, x1, y0, y1), medidas sobre la plantilla.
+  const ROWS = [556.5, 602.25, 648, 693.75, 739.5, 786];
+  const IZQ = [561, 1035.75], DER = [1440.75, 1770];
+  const fila = (i, [x0, x1]) => ({ x0, x1, y0: ROWS[i], y1: ROWS[i + 1] });
+  const CELDAS = {
+    numero:    { x0: 1440.75, x1: 1770, y0: 33, y1: 281, size: 32, bold: true },
+    concepto:  { x0: 729.75, x1: 1770, y0: 372.75, y1: 418.5 },
+    razon:     fila(0, IZQ), nit: fila(1, IZQ), direccion: fila(2, IZQ),
+    servicio:  fila(3, IZQ), fecha: fila(4, IZQ),
+    medidas:   fila(0, DER), volumen: fila(1, DER), tipo: fila(2, DER),
+    proximo:   fila(3, DER), producto: fila(4, DER),
+  };
+  const CAMPOS = Object.keys(CELDAS);
+  const $ = (id) => document.getElementById(id);
+
+  const LS_NUM = 'wps-cert-ultimo-numero';
+  const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+  const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+
+  const hoyISO = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const masMeses = (iso, n) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    const f = new Date(y, m - 1 + n, d);
+    return `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, '0')}-${String(f.getDate()).padStart(2, '0')}`;
+  };
+  const fechaTexto = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${d}-${m}-${y}`; };
+
+  function valores() {
+    const v = {};
+    for (const c of CAMPOS) v[c] = $(c).value.trim();
+    v.numero = v.numero.replace(/^N°?\s*/i, '');
+    return {
+      ...v,
+      numero: v.numero ? `N°${v.numero}` : '',
+      razon: v.razon.toUpperCase(),
+      fecha: fechaTexto(v.fecha),
+      proximo: fechaTexto(v.proximo),
+    };
+  }
+
+  // ---------- Vista previa (canvas) ----------
+  const plantilla = new Image();
+  plantilla.src = 'plantilla.jpg';
+  const lienzo = $('lienzo'), ctx = lienzo.getContext('2d');
+  const K = lienzo.width / PAGE_W;
+
+  function dibujarPrevia() {
+    if (!plantilla.complete) return;
+    ctx.drawImage(plantilla, 0, 0, lienzo.width, lienzo.height);
+    const v = valores();
+    ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const c of CAMPOS) {
+      const t = v[c]; if (!t) continue;
+      const cel = CELDAS[c];
+      let size = cel.size || 26;
+      const ancho = (cel.x1 - cel.x0) - 16;
+      ctx.font = `${cel.bold ? 'bold ' : ''}${size * K}px Helvetica, Arial, sans-serif`;
+      while (ctx.measureText(t).width > ancho * K && size > 10) {
+        size -= 1; ctx.font = `${cel.bold ? 'bold ' : ''}${size * K}px Helvetica, Arial, sans-serif`;
+      }
+      ctx.fillText(t, ((cel.x0 + cel.x1) / 2) * K, ((cel.y0 + cel.y1) / 2) * K);
+    }
+  }
+  plantilla.onload = dibujarPrevia;
+
+  // ---------- PDF ----------
+  async function imagenBase() {
+    if (!plantilla.complete) await new Promise((r) => (plantilla.onload = () => { dibujarPrevia(); r(); }));
+    return plantilla;
+  }
+
+  async function generarPDF() {
+    const v = valores();
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'pt', format: [PAGE_W, PAGE_H], orientation: 'landscape', compress: true });
+    doc.addImage(await imagenBase(), 'JPEG', 0, 0, PAGE_W, PAGE_H);
+    doc.setTextColor(0, 0, 0);
+    for (const c of CAMPOS) {
+      const t = v[c]; if (!t) continue;
+      const cel = CELDAS[c];
+      let size = cel.size || 26;
+      doc.setFont('helvetica', cel.bold ? 'bold' : 'normal');
+      const ancho = (cel.x1 - cel.x0) - 16;
+      while (doc.getStringUnitWidth(t) * size > ancho && size > 10) size -= 1;
+      doc.setFontSize(size);
+      // baseline 'middle' de jsPDF queda un poco alto: se baja 3 pt.
+      doc.text(t, (cel.x0 + cel.x1) / 2, (cel.y0 + cel.y1) / 2 + 3, { align: 'center', baseline: 'middle' });
+    }
+    doc.setProperties({ title: `Certificado ${v.numero} ${v.razon}`, author: 'Water Proof System SAS' });
+    const nombre = `CERTIFICADO_${v.numero.replace('°', '')}_${v.razon.replace(/[^A-Z0-9Ñ]+/g, '_').replace(/^_|_$/g, '')}.pdf`;
+    doc.save(nombre);
+    return nombre;
+  }
+
+  // ---------- Pegar solicitud en texto ----------
+  const ALIAS = [
+    [/^(n[°ºo.]*|numero|número|consecutivo)$/, 'numero'],
+    [/^concepto/, 'concepto'],
+    [/^(razon|razón|cliente|empresa|nombre|edificio|conjunto)/, 'razon'],
+    [/^nit/, 'nit'],
+    [/^(direcci|dir\b)/, 'direccion'],
+    [/^servicio/, 'servicio'],
+    [/^(fecha pr|pr[oó]ximo)/, 'proximo'],
+    [/^fecha/, 'fecha'],
+    [/^medida/, 'medidas'],
+    [/^(volumen|capacidad)/, 'volumen'],
+    [/^tipo/, 'tipo'],
+    [/^(producto|dosific)/, 'producto'],
+  ];
+  function aISO(t) {
+    const m = t.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+    if (m) { const y = m[3].length === 2 ? '20' + m[3] : m[3]; return `${y}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`; }
+    const iso = t.match(/\d{4}-\d{2}-\d{2}/); return iso ? iso[0] : '';
+  }
+  function pegar() {
+    const llenos = [];
+    for (const linea of $('texto').value.split(/\r?\n/)) {
+      const i = linea.search(/[:=]/); if (i < 1) continue;
+      const etiqueta = linea.slice(0, i).trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const valor = linea.slice(i + 1).trim(); if (!valor) continue;
+      const hit = ALIAS.find(([re]) => re.test(etiqueta)); if (!hit) continue;
+      const campo = hit[1];
+      $(campo).value = (campo === 'fecha' || campo === 'proximo') ? aISO(valor) : valor;
+      if (campo === 'fecha' && $(campo).value) $('proximo').value = masMeses($('fecha').value, 6);
+      llenos.push(campo);
+    }
+    const msg = $('msgPegar');
+    msg.className = 'msg ' + (llenos.length ? 'ok' : 'bad');
+    msg.textContent = llenos.length ? `Listo: se llenaron ${llenos.length} campos. Revisa abajo.` : 'No reconocí ningún dato. Usa el formato "Campo: valor".';
+    dibujarPrevia();
+  }
+
+  // ---------- Formulario ----------
+  function siguienteNumero() {
+    const ult = parseInt(lsGet(LS_NUM), 10);
+    return Number.isFinite(ult) ? String(ult + 1) : '';
+  }
+  function reiniciar(mantenerCliente) {
+    if (!mantenerCliente) for (const c of ['razon', 'nit', 'direccion', 'tipo']) $(c).value = '';
+    for (const c of ['medidas', 'volumen']) $(c).value = '';
+    for (const [k, d] of Object.entries(DEFAULTS)) if (!$(k).value) $(k).value = d;
+    $('numero').value = siguienteNumero();
+    if (!$('fecha').value) $('fecha').value = hoyISO();
+    $('proximo').value = masMeses($('fecha').value, 6);
+    $('msg').textContent = '';
+    dibujarPrevia();
+  }
+
+  $('fecha').addEventListener('change', () => { if ($('fecha').value) $('proximo').value = masMeses($('fecha').value, 6); dibujarPrevia(); });
+  $('form').addEventListener('input', dibujarPrevia);
+  $('btnPegar').addEventListener('click', pegar);
+  $('btnNuevo').addEventListener('click', () => reiniciar(true));
+  $('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = $('msg'), btn = $('btnPdf');
+    btn.disabled = true;
+    try {
+      const nombre = await generarPDF();
+      const n = parseInt($('numero').value.replace(/\D/g, ''), 10);
+      if (Number.isFinite(n)) lsSet(LS_NUM, String(n));
+      msg.className = 'msg ok'; msg.textContent = `Descargado: ${nombre}`;
+    } catch (err) {
+      msg.className = 'msg bad'; msg.textContent = 'No se pudo generar el PDF: ' + err.message;
+    } finally { btn.disabled = false; }
+  });
+
+  reiniciar(false);
+})();
+</script>
+</body>
+</html>
