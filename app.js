@@ -3,11 +3,22 @@
 // Todo se guarda primero en el teléfono (IndexedDB), así la app funciona sin internet;
 // sync.js sube los datos a la hoja de Google cuando hay señal.
 
-const APP_VERSION = '0.8.0';
-const ESTADOS = ['OK', 'Revisar', 'Falla', 'N/A'];
+const APP_VERSION = '0.9.0';
+// Listas definidas con el Director Técnico (oct 2026).
+const ESTADOS = ['OK', 'Programar mtto', 'Reparar', 'N/A'];
+const ESTADOS_ANTIGUOS = { Revisar: 'Programar mtto', Falla: 'Reparar' };
 const FRECUENCIAS = { Mensual: 1, Bimestral: 2, Trimestral: 3, Semestral: 6, Anual: 12 };
-const TIPOS = ['Centrífuga', 'Sumergible', 'Multietapa', 'Periférica', 'Turbina vertical'];
-const ACTIVIDADES = ['Mantenimiento preventivo', 'Mantenimiento correctivo', 'Instalación', 'Diagnóstico', 'Visita técnica'];
+// Listas desplegables: el operario puede escribir otra opción y la app la recuerda (ver aprender()).
+const LISTAS = {
+  marcas: ['IHM', 'Barnes', 'Barmesa', 'Ture', 'Franklin', 'Grundfos', 'Pedrollo', 'Hydromac'],
+  tipos: ['Centrífuga', 'Multietapas horizontal', 'Multietapas vertical', 'Sumergible', 'Eyectora', 'De paso'],
+  actividades: ['Mantenimiento preventivo', 'Mantenimiento correctivo', 'Instalación', 'Diagnóstico', 'Visita técnica'],
+  cargos: ['Administrador', 'Portero', 'Conserje', 'Residente'],
+};
+// Frases de un toque: se agregan o quitan del campo de texto.
+const RECOMENDACIONES = ['Cambio de rodamientos', 'Cambio sello mecánico', 'Bobinado de motor', 'Limpieza foso',
+  'Cambio válvula cheque', 'Cambio válvula', 'Cambio de manómetro'];
+const OBS_RESERVA = ['Válvula de flotador en buen estado', 'Válvula de flotador en mal estado', 'Tanque para lavar', 'Tanque para impermeabilizar'];
 // Fotos: lado largo máximo y calidad JPEG (2000 px ≈ 4 MP, legible para placas de datos).
 const FOTO_MAX = 2000, FOTO_CALIDAD = 0.8;
 const DEFAULT_SETTINGS = { operario: '', siguienteNumero: 1445, firmaTecnico: '' };
@@ -15,6 +26,7 @@ const DEFAULT_SETTINGS = { operario: '', siguienteNumero: 1445, firmaTecnico: ''
 const app = document.getElementById('app');
 let R = null;          // reporte abierto
 let CLIENTES = [];     // clientes guardados (para autocompletar)
+let APRENDIDAS = {};   // opciones escritas a mano, por lista
 let LOGO = '';         // logo en data URL para el PDF
 let installPrompt = null;
 
@@ -201,7 +213,7 @@ function field(label, path, o = {}) {
   const attrs = [
     `data-path="${path}"`,
     o.inputmode ? `inputmode="${o.inputmode}"` : '',
-    o.list ? `list="${o.list}"` : '',
+    o.list ? `list="dl-${o.list}"` : '',
     o.placeholder ? `placeholder="${esc(o.placeholder)}"` : '',
   ].join(' ');
   const cls = `fld${o.full ? ' full' : ''}`;
@@ -218,6 +230,14 @@ function seg(label, path) {
   const btns = ESTADOS.map((o) => `<button type="button" class="seg-btn s-${slug(o)} ${v === o ? 'on' : ''}" data-seg="${path}" data-val="${o}">${o}</button>`).join('');
   return `<div class="fld full"><span>${label}</span><div class="seg">${btns}</div></div>`;
 }
+
+function chips(path, frases, sep) {
+  const v = getPath(R, path) || '';
+  const btns = frases.map((f) => `<button type="button" class="chip ${partes(v, sep).includes(f) ? 'on' : ''}" data-chip="${path}" data-sep="${esc(sep)}" data-val="${esc(f)}">${esc(f)}</button>`).join('');
+  return `<div class="chips">${btns}</div>`;
+}
+const partes = (v, sep) => v.split(sep.trim() || '\n').map((x) => x.trim()).filter(Boolean);
+const recos = (sec) => field('Recomendaciones', sec + '.recomendaciones', { type: 'textarea' }) + chips(sec + '.recomendaciones', RECOMENDACIONES, '\n');
 
 function section(id, title, body, aplicaPath) {
   const on = aplicaPath ? getPath(R, aplicaPath) : true;
@@ -236,9 +256,9 @@ function pumpCard(sec, i) {
         <button type="button" class="link danger" data-act="delpump" data-sec="${sec}" data-i="${i}">Quitar</button>
       </div></div>
     <div class="grid2">
-      ${field('Marca', base + '.marca')}
+      ${field('Marca', base + '.marca', { list: 'marcas' })}
       ${field('Modelo', base + '.modelo')}
-      ${field('Tipo', base + '.tipo', { list: 'dl-tipos', full: true })}
+      ${field('Tipo', base + '.tipo', { list: 'tipos', full: true })}
       ${field('Voltaje (V)', base + '.voltaje', { inputmode: 'decimal', placeholder: ant(prev.voltaje) })}
       ${field('Amperaje (A)', base + '.amperaje', { inputmode: 'decimal', placeholder: ant(prev.amperaje) })}
     </div>
@@ -255,8 +275,8 @@ function rciBlock(key, label) {
   const prev = R.rci[key]._prev || {};
   const ant = (v) => (v ? `Anterior: ${v}` : '');
   return `<h3 class="sub-h">${label}</h3><div class="grid2">
-    ${field('Marca', base + '.marca')}${field('Modelo', base + '.modelo')}
-    ${field('Tipo', base + '.tipo', { list: 'dl-tipos', full: true })}
+    ${field('Marca', base + '.marca', { list: 'marcas' })}${field('Modelo', base + '.modelo')}
+    ${field('Tipo', base + '.tipo', { list: 'tipos', full: true })}
     ${field('Voltaje (V)', base + '.voltaje', { inputmode: 'decimal', placeholder: ant(prev.voltaje) })}
     ${field('Amperaje (A)', base + '.amperaje', { inputmode: 'decimal', placeholder: ant(prev.amperaje) })}
   </div>`;
@@ -349,27 +369,27 @@ function renderForm(keepScroll) {
   <form class="form" onsubmit="return false">
     ${r.numero ? '' : `<div class="note">El número del reporte se asigna al finalizar. ${ONLINE_MODE ? 'Se guarda en el teléfono aunque no haya señal y se sube a la nube al finalizar.' : 'Todo se guarda solo en el teléfono, aunque no haya señal.'}</div>`}
     ${section('general', 'Datos generales', `<div class="grid2">
-      ${field('NIT', 'cliente.nit', { list: 'dl-nits', placeholder: 'Escriba el NIT' })}
+      ${field('NIT', 'cliente.nit', { list: 'nits', placeholder: 'Escriba el NIT' })}
       ${field('Fecha', 'fecha', { type: 'date' })}
-      ${field('Cliente', 'cliente.nombre', { list: 'dl-clientes', full: true, placeholder: 'O busque por nombre' })}
+      ${field('Cliente', 'cliente.nombre', { list: 'clientes', full: true, placeholder: 'O busque por nombre' })}
       ${field('Dirección', 'cliente.direccion', { full: true })}
       ${field('Correo del cliente', 'cliente.correo', { type: 'email', inputmode: 'email', full: true })}
-      ${field('Actividad realizada', 'actividad', { list: 'dl-actividades', full: true })}
+      ${field('Actividad realizada', 'actividad', { list: 'actividades', full: true })}
     </div>`)}
     ${section('potable', 'Electrobombas agua potable', pumps('potable') + `<div class="grid2" style="margin-top:12px">
       ${field('Presión arranque (PSI)', 'potable.presionArranque', { inputmode: 'decimal' })}
       ${field('Presión parada (PSI)', 'potable.presionParada', { inputmode: 'decimal' })}
-    </div>` + field('Recomendaciones', 'potable.recomendaciones', { type: 'textarea' }), 'potable.aplica')}
-    ${section('eyectoras', 'Bombas eyectoras', pumps('eyectoras') + field('Recomendaciones', 'eyectoras.recomendaciones', { type: 'textarea' }), 'eyectoras.aplica')}
-    ${section('rci', 'Sistema RCI', rciBlock('principal', 'Bomba principal') + rciBlock('jockey', 'Jockey') + field('Recomendaciones', 'rci.recomendaciones', { type: 'textarea' }), 'rci.aplica')}
+    </div>` + recos('potable'), 'potable.aplica')}
+    ${section('eyectoras', 'Bombas eyectoras', pumps('eyectoras') + recos('eyectoras'), 'eyectoras.aplica')}
+    ${section('rci', 'Sistema RCI', rciBlock('principal', 'Bomba principal') + rciBlock('jockey', 'Jockey') + recos('rci'), 'rci.aplica')}
     ${section('tanques', 'Tanques', seg('Tanque hidroneumático', 'tanques.hidro.estado') + field('Observación', 'tanques.hidro.obs') +
-      seg('Tanque reserva', 'tanques.reserva.estado') + field('Observación', 'tanques.reserva.obs'))}
+      seg('Tanque reserva', 'tanques.reserva.estado') + field('Observación', 'tanques.reserva.obs') + chips('tanques.reserva.obs', OBS_RESERVA, '. '))}
     ${section('fotos', 'Fotos', photosBlock())}
     ${section('cierre', 'Cierre y firmas', `<div class="grid2">
       ${field('Quien realiza la inspección', 'cierre.realiza', { full: true })}
       ${field('Frecuencia de mantenimiento', 'cierre.frecuencia', { options: Object.keys(FRECUENCIAS), full: true })}
       ${field('Quien recibe la inspección', 'cierre.recibe', { full: true })}
-      ${field('Cargo de quien recibe', 'cierre.cargo', { full: true, placeholder: 'Ej: Administrador' })}
+      ${field('Cargo de quien recibe', 'cierre.cargo', { list: 'cargos', full: true, placeholder: 'Ej: Administrador' })}
     </div>` + sigBlock('Firma de quien realiza', 'cierre.firmaTecnico') + sigBlock('Firma de quien recibe', 'cierre.firmaRecibe'))}
     ${r.estado === 'borrador' ? '<button type="button" class="btn danger block" data-act="delreport">Eliminar borrador</button>' : ''}
   </form>
@@ -378,8 +398,7 @@ function renderForm(keepScroll) {
       ? `<button class="btn" data-act="download">Ver PDF</button><button class="btn primary" data-act="finalize">Enviar al cliente</button>`
       : `<button class="btn primary" data-act="finalize">Finalizar y generar PDF</button>`}
   </div></div>
-  <datalist id="dl-tipos">${TIPOS.map((t) => `<option value="${t}">`).join('')}</datalist>
-  <datalist id="dl-actividades">${ACTIVIDADES.map((t) => `<option value="${t}">`).join('')}</datalist>
+  ${Object.keys(LISTAS).map((k) => `<datalist id="dl-${k}">${opcionesLista(k).map((t) => `<option value="${esc(t)}">`).join('')}</datalist>`).join('')}
   <datalist id="dl-clientes">${CLIENTES.map((c) => `<option value="${esc(c.nombre)}">${esc(c.nit || '')}</option>`).join('')}</datalist>
   <datalist id="dl-nits">${CLIENTES.filter((c) => c.nit).map((c) => `<option value="${esc(c.nit)}">${esc(c.nombre)}</option>`).join('')}</datalist>`;
 
@@ -908,6 +927,19 @@ function openClientPicker(list) {
   document.body.appendChild(bg);
 }
 
+// ---------- Opciones aprendidas ----------
+const opcionesLista = (k) => [...LISTAS[k], ...(APRENDIDAS[k] || [])];
+const loadAprendidas = async () => { APRENDIDAS = (await idb.get('kv', 'aprendidas')) || {}; };
+
+// Lo que se escribe a mano en una lista queda como opción para los próximos reportes.
+async function aprender(k, valor) {
+  const v = valor.trim().replace(/\s+/g, ' ');
+  if (!v || opcionesLista(k).some((x) => clientKey(x) === clientKey(v))) return;
+  (APRENDIDAS[k] ||= []).push(v);
+  await idb.put('kv', APRENDIDAS, 'aprendidas');
+  document.getElementById('dl-' + k)?.insertAdjacentHTML('beforeend', `<option value="${esc(v)}">`);
+}
+
 // ---------- Eventos ----------
 app.addEventListener('input', (e) => {
   const el = e.target;
@@ -932,6 +964,8 @@ app.addEventListener('change', async (e) => {
   if (el.matches('[data-photo]') && el.files.length) { const files = [...el.files]; el.value = ''; return addPhotos(files); }
   if (el.matches('[data-restore]') && el.files[0]) { const f = el.files[0]; el.value = ''; return restoreBackup(f); }
   if (R && (el.dataset.path === 'cliente.nombre' || el.dataset.path === 'cliente.nit')) handleClientField(el.dataset.path, el.value);
+  const lista = el.getAttribute?.('list')?.slice(3);
+  if (R && LISTAS[lista]) aprender(lista, el.value);
 });
 
 app.addEventListener('click', async (e) => {
@@ -944,6 +978,20 @@ app.addEventListener('click', async (e) => {
     const val = getPath(R, path) === sg.dataset.val ? '' : sg.dataset.val;
     setPath(R, path, val);
     sg.parentElement.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('on', b.dataset.val === val));
+    scheduleSave();
+    return;
+  }
+
+  const ch = e.target.closest('[data-chip]');
+  if (ch && R) {
+    const { chip: path, sep, val } = ch.dataset;
+    const actual = partes(getPath(R, path) || '', sep);
+    const nuevo = actual.includes(val) ? actual.filter((x) => x !== val) : [...actual, val];
+    setPath(R, path, nuevo.join(sep));
+    ch.classList.toggle('on', nuevo.includes(val));
+    const el = app.querySelector(`[data-path="${path}"]`);
+    if (el) el.value = getPath(R, path);
+    if (nuevo.length) markOk(path);
     scheduleSave();
     return;
   }
@@ -1024,6 +1072,13 @@ app.addEventListener('click', async (e) => {
   }
 });
 
+// Borradores creados con los estados anteriores (Revisar / Falla).
+function migrarEstados(r) {
+  const fix = (o, k) => { if (o && ESTADOS_ANTIGUOS[o[k]]) o[k] = ESTADOS_ANTIGUOS[o[k]]; };
+  ['potable', 'eyectoras'].forEach((sec) => r[sec].bombas.forEach((b) => { fix(b, 'tablero'); fix(b, 'estado'); fix(b, 'foso'); }));
+  fix(r.tanques.hidro, 'estado'); fix(r.tanques.reserva, 'estado');
+}
+
 // ---------- Navegación ----------
 async function route() {
   await flushSave();
@@ -1034,7 +1089,8 @@ async function route() {
   } else if (h.startsWith('#/r/')) {
     R = await idb.get('reportes', h.slice(4));
     if (!R) { location.hash = '#'; return; }
-    await loadClients();
+    if (R.estado === 'borrador') migrarEstados(R);
+    await Promise.all([loadClients(), loadAprendidas()]);
     renderForm();
   } else if (h === '#/clientes') {
     R = null;

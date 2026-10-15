@@ -82,16 +82,26 @@ main, .form { max-width: 720px; margin: 0 auto; padding: 14px 12px 120px; }
 .fld.err input, .fld.err textarea, .fld.err .sig { border-color: var(--bad); background: #fff8f7; }
 .fld.err > span::after { content: " · obligatorio"; color: var(--bad); }
 
-/* Botones de estado OK / Revisar / Falla */
+/* Botones de estado OK / Programar mtto / Reparar */
 .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .seg-btn {
-  min-height: 42px; border: 1.5px solid var(--line); border-radius: 10px;
+  min-height: 42px; padding: 2px 4px; line-height: 1.15; border: 1.5px solid var(--line); border-radius: 10px;
   background: #fff; font-size: 14px; font-weight: 600; color: var(--muted);
 }
 .seg-btn.on.s-ok { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); }
-.seg-btn.on.s-revisar { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
-.seg-btn.on.s-falla { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); }
+.seg-btn.on.s-programarmtto { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+.seg-btn.on.s-reparar { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); }
 .seg-btn.on.s-na { background: #eef1f6; border-color: var(--muted); color: var(--text); }
+
+/* Frases de un toque (recomendaciones, observaciones) */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.chip {
+  border: 1.5px solid var(--line); border-radius: 999px; background: #fff;
+  padding: 7px 12px; font-size: 13px; font-weight: 600; color: var(--muted);
+}
+.chip::before { content: "+ "; }
+.chip.on { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); }
+.chip.on::before { content: "✓ "; }
 
 /* Interruptor "Aplica" */
 .switch { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--blue-dark); }

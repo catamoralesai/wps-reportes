@@ -18,7 +18,7 @@ function buildReportPdf(r, logoDataUrl) {
 
   const W = 210, H = 297, M = 10, CW = W - 2 * M, BOTTOM = H - 14;
   const BLUE = [31, 78, 156], LABEL = [221, 231, 244], TITLE = [196, 213, 238], LINE = [110, 122, 145];
-  const STATUS_COLOR = { OK: [26, 127, 75], Revisar: [163, 91, 0], Falla: [180, 35, 24] };
+  const STATUS_COLOR = { OK: [26, 127, 75], 'Programar mtto': [163, 91, 0], Reparar: [180, 35, 24], Revisar: [163, 91, 0], Falla: [180, 35, 24] };
   let y = M;
 
   const txt = (v) => (v == null ? '' : String(v));
