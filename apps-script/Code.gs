@@ -17,6 +17,8 @@ const COLS = {
   Usuarios: ['nombre', 'codigo', 'rol', 'activo'],
   Config: ['clave', 'valor'],
   Sugerencias: ['id', 'fecha', 'nombre', 'rol', 'sugerencia', 'pantalla', 'version', 'estado'],
+  Certificados: ['numero', 'fecha', 'razon_social', 'nit', 'direccion', 'servicio', 'medidas', 'volumen', 'tipo',
+    'proximo_lavado', 'producto', 'concepto', 'generado_por', 'rol', 'generado', 'pdf', 'pdf_id', 'reemplazos'],
 };
 const ROLES_OFICINA = ['admin', 'oficina'];
 
@@ -181,8 +183,36 @@ const ACCIONES = {
       file = it.next();
       withLock(() => setConfig('plantilla_certificado', file.getId()));
     }
-    return { nombre: user.nombre, imagen: Utilities.base64Encode(file.getBlob().getBytes()) };
+    return { nombre: user.nombre, rol: user.rol, siguiente: siguienteCertificado(),
+      imagen: Utilities.base64Encode(file.getBlob().getBytes()) };
   },
+
+  // Cada certificado se registra (pestaña Certificados + PDF en Drive) antes de descargarse.
+  // Un número ya usado se rechaza; solo la oficina puede reemplazarlo (p. ej. para corregir un error).
+  registrarCertificado: (req, user) => withLock(() => {
+    const c = req.certificado || {};
+    const numero = String(c.numero || '').replace(/\D/g, '');
+    if (!numero || !c.razon || !req.pdf) throw new Error('Certificado incompleto');
+    ensureSheet('Certificados');
+    const prev = readAll('Certificados').filter((x) => x.numero === numero)[0];
+    if (prev && !req.reemplazar) {
+      throw new Error('NUMERO_USADO|El N°' + numero + ' ya se usó: ' + prev.razon_social + ', generado por ' +
+        prev.generado_por + ' el ' + prev.generado.slice(0, 10) + '.');
+    }
+    if (prev && ROLES_OFICINA.indexOf(user.rol) < 0) throw new Error('Solo la oficina puede reemplazar un certificado');
+    if (prev && prev.pdf_id) { try { DriveApp.getFileById(prev.pdf_id).setTrashed(true); } catch (e) { /* ya no existe */ } }
+
+    const file = carpetaCertificados().createFile(
+      Utilities.newBlob(Utilities.base64Decode(req.pdf), 'application/pdf', req.pdfNombre || 'CERTIFICADO_N' + numero + '.pdf'));
+    upsert('Certificados', {
+      id: numero, // upsert busca la fila por la primera columna (numero)
+      numero: numero, fecha: c.fecha, razon_social: c.razon, nit: c.nit, direccion: c.direccion, servicio: c.servicio,
+      medidas: c.medidas, volumen: c.volumen, tipo: c.tipo, proximo_lavado: c.proximo, producto: c.producto,
+      concepto: c.concepto, generado_por: user.nombre, rol: user.rol, generado: new Date().toISOString(),
+      pdf: file.getUrl(), pdf_id: file.getId(), reemplazos: prev ? (Number(prev.reemplazos) || 0) + 1 : 0,
+    });
+    return { pdf: file.getUrl(), siguiente: Number(numero) + 1 };
+  }),
 
   reportes: () => readAll('Reportes')
     .map((r) => ({ id: r.id, numero: Number(r.numero), fecha: r.fecha, cliente: r.cliente, nit: r.nit, estado: r.estado,
@@ -192,6 +222,22 @@ const ACCIONES = {
 };
 
 // ---------- Utilidades ----------
+function siguienteCertificado() {
+  const sh = sheet('Certificados');
+  if (!sh) return null;
+  const nums = readAll('Certificados').map((x) => Number(x.numero)).filter((n) => n > 0);
+  return nums.length ? Math.max.apply(null, nums) + 1 : null;
+}
+
+// Carpeta "Certificados" dentro de la carpeta de la app en Drive.
+function carpetaCertificados() {
+  const id = getConfig('carpeta_certificados');
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) { /* la borraron: se crea otra */ } }
+  const folder = DriveApp.getFolderById(getConfig('carpeta_drive')).createFolder('Certificados');
+  setConfig('carpeta_certificados', folder.getId());
+  return folder;
+}
+
 function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }

@@ -122,6 +122,7 @@ Tipo establecimiento: Residencial"></textarea>
         <button type="button" class="ghost" id="btnNuevo">Nuevo certificado (siguiente número)</button>
       </div>
       <p class="msg" id="msg"></p>
+      <button type="button" class="ghost hidden" id="btnReemplazar"></button>
     </form>
   </section>
 
@@ -215,7 +216,7 @@ Tipo establecimiento: Residencial"></textarea>
     return plantilla;
   }
 
-  async function generarPDF() {
+  async function armarPDF() {
     const v = valores();
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: 'pt', format: [PAGE_W, PAGE_H], orientation: 'landscape', compress: true });
@@ -234,8 +235,7 @@ Tipo establecimiento: Residencial"></textarea>
     }
     doc.setProperties({ title: `Certificado ${v.numero} ${v.razon}`, author: 'Water Proof System SAS' });
     const nombre = `CERTIFICADO_${v.numero.replace('°', '')}_${v.razon.replace(/[^A-Z0-9Ñ]+/g, '_').replace(/^_|_$/g, '')}.pdf`;
-    doc.save(nombre);
-    return nombre;
+    return { doc, nombre, v };
   }
 
   // ---------- Pegar solicitud en texto ----------
@@ -277,9 +277,11 @@ Tipo establecimiento: Residencial"></textarea>
   }
 
   // ---------- Formulario ----------
+  // El servidor conoce el último certificado registrado; el teléfono, el último que generó aquí.
   function siguienteNumero() {
     const ult = parseInt(lsGet(LS_NUM), 10);
-    return Number.isFinite(ult) ? String(ult + 1) : '';
+    const opciones = [SESION && SESION.siguiente, Number.isFinite(ult) ? ult + 1 : null].filter(Boolean);
+    return opciones.length ? String(Math.max(...opciones)) : '';
   }
   function reiniciar(mantenerCliente) {
     if (!mantenerCliente) for (const c of ['razon', 'nit', 'direccion', 'tipo']) $(c).value = '';
@@ -296,33 +298,60 @@ Tipo establecimiento: Residencial"></textarea>
   $('form').addEventListener('input', dibujarPrevia);
   $('btnPegar').addEventListener('click', pegar);
   $('btnNuevo').addEventListener('click', () => reiniciar(true));
-  $('form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const msg = $('msg'), btn = $('btnPdf');
-    btn.disabled = true;
+  // Se registra en el servidor (hoja Certificados + PDF en Drive) y solo entonces se descarga.
+  async function emitir(reemplazar) {
+    const msg = $('msg'), btn = $('btnPdf'), btnR = $('btnReemplazar');
+    btn.disabled = true; btnR.classList.add('hidden');
+    msg.className = 'msg'; msg.textContent = 'Registrando el certificado…';
     try {
-      const nombre = await generarPDF();
-      const n = parseInt($('numero').value.replace(/\D/g, ''), 10);
-      if (Number.isFinite(n)) lsSet(LS_NUM, String(n));
-      msg.className = 'msg ok'; msg.textContent = `Descargado: ${nombre}`;
+      const { doc, nombre, v } = await armarPDF();
+      const registro = await api('registrarCertificado', SESION.codigo, {
+        solicitud: crypto.randomUUID(), // el mismo en los reintentos: el servidor no lo registra dos veces
+        reemplazar: !!reemplazar,
+        pdf: doc.output('datauristring').split(',')[1],
+        pdfNombre: nombre,
+        certificado: { ...v, numero: v.numero.replace(/\D/g, '') },
+      });
+      doc.save(nombre);
+      const n = parseInt(v.numero.replace(/\D/g, ''), 10);
+      lsSet(LS_NUM, String(n));
+      SESION.siguiente = registro.siguiente;
+      msg.className = 'msg ok';
+      msg.textContent = `Descargado y registrado: ${nombre}. `;
+      const a = document.createElement('a');
+      a.href = registro.pdf; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Ver copia en Drive';
+      msg.appendChild(a);
     } catch (err) {
-      msg.className = 'msg bad'; msg.textContent = 'No se pudo generar el PDF: ' + err.message;
+      const [codigo, texto] = err.message.includes('|') ? err.message.split('|') : ['', err.message];
+      msg.className = 'msg bad';
+      msg.textContent = codigo === 'NUMERO_USADO'
+        ? `${texto} Usa otro número.`
+        : 'No se generó el certificado: ' + texto;
+      if (codigo === 'NUMERO_USADO' && ['admin', 'oficina'].includes(SESION.rol)) {
+        btnR.textContent = `Reemplazar el N°${$('numero').value.replace(/\D/g, '')} (corrige el anterior)`;
+        btnR.classList.remove('hidden');
+      }
     } finally { btn.disabled = false; }
-  });
+  }
+
+  $('form').addEventListener('submit', (e) => { e.preventDefault(); emitir(false); });
+  $('btnReemplazar').addEventListener('click', () => emitir(true));
 
   // ---------- Acceso (mismo código y servidor que la app de reportes) ----------
   const API_URL = (window.WPS_CONFIG && window.WPS_CONFIG.apiUrl) || '';
   const LS_COD = 'wps-cert-codigo';
 
   // Apps Script a veces responde con una página de error: se reintenta hasta 3 veces.
-  async function api(accion, codigo) {
+  let SESION = null;
+
+  async function api(accion, codigo, extra = {}) {
     for (let intento = 1; ; intento++) {
       let out;
       try {
         const res = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // evita la verificación CORS previa
-          body: JSON.stringify({ accion, codigo }),
+          body: JSON.stringify({ ...extra, accion, codigo }),
         });
         out = JSON.parse(await res.text());
       } catch (err) {
@@ -342,6 +371,7 @@ Tipo establecimiento: Residencial"></textarea>
       const data = await api('plantillaCertificado', codigo);
       await new Promise((ok, mal) => { plantilla.onload = ok; plantilla.onerror = () => mal(new Error('La plantilla llegó dañada')); plantilla.src = 'data:image/jpeg;base64,' + data.imagen; });
       lsSet(LS_COD, codigo);
+      SESION = { codigo, nombre: data.nombre, rol: data.rol, siguiente: data.siguiente };
       $('subtitulo').textContent = `Water Proof System SAS · ${data.nombre}`;
       $('acceso').classList.add('hidden'); $('app').classList.remove('hidden'); $('btnSalir').classList.remove('hidden');
       msg.textContent = '';
@@ -355,6 +385,7 @@ Tipo establecimiento: Residencial"></textarea>
   $('acceso').addEventListener('submit', (e) => { e.preventDefault(); entrar($('codigo').value.trim()); });
   $('btnSalir').addEventListener('click', () => {
     try { localStorage.removeItem(LS_COD); } catch {}
+    SESION = null;
     plantilla.removeAttribute('src');
     $('codigo').value = '';
     $('app').classList.add('hidden'); $('btnSalir').classList.add('hidden'); $('acceso').classList.remove('hidden');
