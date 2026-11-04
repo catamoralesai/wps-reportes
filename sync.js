@@ -139,16 +139,40 @@ async function pushReport(r) {
     .map((f, i) => ({ f, i }))
     .filter(({ f }) => !f.driveId && f.data)
     .map(({ f, i }) => ({ id: f.id, nota: f.nota, nombre: `foto-${r.numero}-${i + 1}.jpg`, data: f.data.split(',')[1] }));
-  const out = await api('guardarReporte', { reporte: reportForServer(r), pdf, pdfNombre: pdfName(r), fotos });
+  const envio = r.envio?.estado === 'pendiente' ? { id: r.envio.id, para: r.envio.para } : null;
+  const out = await api('guardarReporte', { reporte: reportForServer(r), pdf, pdfNombre: pdfName(r), fotos, envio });
 
   // Releer la copia local: el operario pudo editar mientras se subía.
   const cur = (await idb.get('reportes', r.id)) || r;
   cur.fotos.forEach((f) => { if (out.fotos[f.id]) f.driveId = out.fotos[f.id]; });
   cur.pdfUrl = out.pdf;
   cur.carpetaUrl = out.carpeta;
-  cur.sync = cur.actualizado === r.actualizado ? 'ok' : 'pendiente';
+  if (envio && out.correo && cur.envio?.id === envio.id) applyEnvio(cur, out.correo);
+  cur.sync = cur.actualizado === r.actualizado && cur.envio?.estado !== 'pendiente' ? 'ok' : 'pendiente';
   await idb.put('reportes', cur);
-  if (R && R.id === cur.id) Object.assign(R, { fotos: cur.fotos, pdfUrl: cur.pdfUrl, carpetaUrl: cur.carpetaUrl, sync: cur.sync });
+  if (R && R.id === cur.id) {
+    Object.assign(R, { fotos: cur.fotos, pdfUrl: cur.pdfUrl, carpetaUrl: cur.carpetaUrl, sync: cur.sync, estado: cur.estado, enviado: cur.enviado, envio: cur.envio });
+    const b = document.querySelector('.topbar .badge');
+    if (b) b.outerHTML = badge(cur.estado);
+  }
+}
+
+// Resultado del correo al cliente. Si falla se reintenta en las siguientes sincronizaciones.
+const MAX_INTENTOS_CORREO = 3;
+function applyEnvio(r, correo) {
+  if (correo.ok) {
+    Object.assign(r.envio, { estado: 'enviado', fecha: Date.now(), error: '' });
+    r.estado = 'enviado';
+    r.enviado = Date.now();
+    toast(`Reporte Nº ${r.numero} enviado a ${r.envio.para} ✓`, 4000);
+    return;
+  }
+  r.envio.intentos = (r.envio.intentos || 0) + 1;
+  r.envio.error = correo.error;
+  if (r.envio.intentos >= MAX_INTENTOS_CORREO) {
+    r.envio.estado = 'error';
+    toast(`No se pudo enviar el reporte Nº ${r.numero}: ${correo.error}`, 6000);
+  }
 }
 
 const pendingReports = async () => (await idb.all('reportes')).filter((r) => r.numero && r.sync !== 'ok');

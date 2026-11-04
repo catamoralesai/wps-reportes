@@ -3,7 +3,7 @@
 // Todo se guarda primero en el teléfono (IndexedDB), así la app funciona sin internet;
 // sync.js sube los datos a la hoja de Google cuando hay señal.
 
-const APP_VERSION = '0.9.0';
+const APP_VERSION = '0.10.0';
 // Listas definidas con el Director Técnico (oct 2026).
 const ESTADOS = ['OK', 'Programar mtto', 'Reparar', 'N/A'];
 const ESTADOS_ANTIGUOS = { Revisar: 'Programar mtto', Falla: 'Reparar' };
@@ -468,23 +468,51 @@ function confirmFinalize() {
   document.body.appendChild(bg);
 }
 
+const CORREO_EMPRESA = 'waterproofsas@gmail.com';
+const correosValidos = (t) => { const l = t.split(',').map((x) => x.trim()).filter(Boolean); return l.length > 0 && l.length <= 5 && l.every((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x)); };
+
+// Texto corto con el estado del correo al cliente.
+function envioNota(r) {
+  const e = r.envio;
+  if (!e) return '';
+  if (e.estado === 'enviado') return `Enviado a ${e.para}`;
+  if (e.estado === 'error') return `No se pudo enviar: ${e.error}`;
+  return `Correo por enviar a ${e.para}`;
+}
+
 function openSendSheet() {
   const correo = R.cliente.correo;
+  const envio = R.envio;
   const bg = document.createElement('div');
   bg.className = 'sheet-bg';
   bg.innerHTML = `<div class="sheet">
     <h3>Reporte Nº ${R.numero} listo</h3>
-    <p>Envíalo al cliente por correo o WhatsApp. Se abrirá el menú de compartir del teléfono con el PDF adjunto.</p>
-    ${correo ? `<div class="copy-row"><code>${esc(correo)}</code><button class="btn ghost" data-sheet="copy">Copiar</button></div>
-      <p style="font-size:13px">El correo del cliente se copia solo. En Gmail, pégalo en “Para”.</p>` : '<p class="note warn">Este reporte no tiene correo del cliente.</p>'}
-    <button class="btn primary" data-sheet="share">Enviar PDF</button>
+    ${ONLINE_MODE ? `<p>El correo sale siempre de ${esc(CORREO_EMPRESA)} con el PDF adjunto. Si no hay señal, se envía apenas vuelva.</p>
+      ${envioNota(R) ? `<p class="note ${envio.estado === 'error' ? 'warn' : ''}">${esc(envioNota(R))}</p>` : ''}
+      <label class="fld"><span>Correo del cliente</span><input id="envioPara" type="email" inputmode="email" autocomplete="off" value="${esc(envio?.para || correo || '')}" placeholder="cliente@correo.com"></label>
+      <button class="btn primary" data-sheet="mail">${envio?.estado === 'enviado' ? 'Enviar de nuevo' : 'Enviar por correo'}</button>
+      <button class="btn" data-sheet="share">Enviar por WhatsApp u otra app</button>`
+    : `<p>Envíalo al cliente por correo o WhatsApp. Se abrirá el menú de compartir del teléfono con el PDF adjunto.</p>
+      <button class="btn primary" data-sheet="share">Enviar PDF</button>`}
     <button class="btn" data-sheet="download">Descargar PDF</button>
     <button class="btn ghost" data-sheet="close">Cerrar</button>
   </div>`;
   bg.addEventListener('click', async (e) => {
     const a = e.target.closest('[data-sheet]')?.dataset.sheet;
     if (e.target === bg || a === 'close') bg.remove();
-    if (a === 'copy') { navigator.clipboard?.writeText(correo); toast('Correo copiado'); }
+    if (a === 'mail') {
+      const para = bg.querySelector('#envioPara').value.split(',').map((x) => x.trim()).filter(Boolean).join(', ');
+      if (!correosValidos(para)) { toast('Revise el correo del cliente'); return; }
+      if (envio?.estado === 'enviado' && !confirm(`Ya se envió a ${envio.para}. ¿Enviarlo de nuevo?`)) return;
+      R.envio = { id: uid(), para, estado: 'pendiente', intentos: 0, pedido: Date.now() };
+      if (R.cliente.correo !== para) R.cliente.correo = para; // queda guardado en la ficha del cliente
+      await saveClient(R);
+      await saveNow();
+      bg.remove();
+      renderForm(true);
+      toast(navigator.onLine ? 'Enviando el reporte…' : 'Sin señal: se enviará cuando vuelva');
+      syncAll();
+    }
     if (a === 'download') downloadPdf();
     if (a === 'share') { await sharePdf(); bg.remove(); }
   });
@@ -636,7 +664,7 @@ async function renderHome() {
     <section class="card"><div class="card-h"><h2>${ONLINE_MODE ? 'Reportes en este teléfono' : 'Reportes'}</h2></div>
       ${reps.length ? `<ul class="list">${reps.map((r) => `<li><button class="row" data-nav="#/r/${r.id}">
         <div><strong>${r.numero ? `Nº ${r.numero}` : 'Sin número'} · ${esc(r.cliente.nombre || 'Sin cliente')}</strong>
-        <small>${fmtDate(r.fecha)} · ${esc(r.actividad)}${r.estado === 'borrador' && faltantes(r).length ? `<br><span class="falta">Falta: ${faltantes(r).map((f) => f[1].toLowerCase()).join(', ')}</span>` : ''}${ONLINE_MODE && r.numero ? (r.sync === 'ok' ? ' · ☁︎ en la nube' : ' · ⏳ por subir') : ''}</small></div>${badge(r.estado)}</button></li>`).join('')}</ul>`
+        <small>${fmtDate(r.fecha)} · ${esc(r.actividad)}${r.estado === 'borrador' && faltantes(r).length ? `<br><span class="falta">Falta: ${faltantes(r).map((f) => f[1].toLowerCase()).join(', ')}</span>` : ''}${ONLINE_MODE && r.numero ? (r.sync === 'ok' ? ' · ☁︎ en la nube' : ' · ⏳ por subir') : ''}${envioNota(r) ? `<br><span class="${r.envio.estado === 'error' ? 'falta' : ''}">✉︎ ${esc(envioNota(r))}</span>` : ''}</small></div>${badge(r.estado)}</button></li>`).join('')}</ul>`
         : '<p class="empty">Aún no hay reportes. Toca “Nuevo reporte” para empezar.</p>'}
     </section>
     ${ONLINE_MODE && esOficina() ? '<section class="card"><div class="card-h"><h2>Todos los reportes (en línea)</h2></div><div id="remotos"><p class="empty">Cargando…</p></div></section>' : ''}

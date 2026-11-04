@@ -194,6 +194,7 @@ main, .form { max-width: 720px; margin: 0 auto; padding: 14px 12px 120px; }
 .sheet {
   width: 100%; max-width: 560px; background: #fff; border-radius: 18px 18px 0 0;
   padding: 18px 16px calc(18px + var(--safe-b));
+  max-height: 92vh; overflow-y: auto;
 }
 .sheet h3 { margin: 0 0 4px; font-size: 19px; }
 .sheet p { margin: 0 0 14px; color: var(--muted); }

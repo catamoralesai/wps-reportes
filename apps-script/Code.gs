@@ -12,7 +12,8 @@
 
 const COLS = {
   Reportes: ['id', 'numero', 'fecha', 'cliente', 'nit', 'direccion', 'actividad', 'estado', 'realiza', 'recibe',
-    'frecuencia', 'recomendaciones', 'pdf', 'carpeta', 'subido_por', 'actualizado', 'pdf_id', 'carpeta_id', 'datos'],
+    'frecuencia', 'recomendaciones', 'pdf', 'carpeta', 'subido_por', 'actualizado', 'pdf_id', 'carpeta_id', 'datos',
+    'correo_id', 'correo_para', 'correo_enviado'],
   Clientes: ['id', 'nombre', 'nit', 'direccion', 'correo', 'frecuencia', 'ultima_visita', 'ultimo_numero', 'actualizado', 'equipos'],
   Usuarios: ['nombre', 'codigo', 'rol', 'activo'],
   Config: ['clave', 'valor'],
@@ -124,6 +125,7 @@ const ACCIONES = {
   guardarReporte: (req, user) => withLock(() => {
     const r = req.reporte;
     if (!r || !r.id || !r.numero) throw new Error('Reporte incompleto');
+    asegurarColumnas('Reportes');
     const prev = readAll('Reportes').filter((x) => x.id === r.id)[0] || {};
     const root = DriveApp.getFolderById(getConfig('carpeta_drive'));
     const nombre = r.numero + ' - ' + (r.cliente.nombre || 'Cliente');
@@ -147,6 +149,24 @@ const ACCIONES = {
       fotos[f.id] = file.getId();
     });
 
+    // Correo al cliente: `envio.id` evita repetirlo si el teléfono vuelve a subir el reporte.
+    let correo = null;
+    let envio = { correo_id: prev.correo_id, correo_para: prev.correo_para, correo_enviado: prev.correo_enviado };
+    if (req.envio && req.envio.id) {
+      if (prev.correo_id === req.envio.id) {
+        correo = { ok: true, para: prev.correo_para };
+      } else {
+        try {
+          enviarCorreo(r, pdfId, req.envio);
+          envio = { correo_id: req.envio.id, correo_para: req.envio.para, correo_enviado: new Date().toISOString() };
+          r.estado = 'enviado';
+          correo = { ok: true, para: req.envio.para };
+        } catch (err) {
+          correo = { ok: false, error: String(err && err.message || err) };
+        }
+      }
+    }
+
     const rec = [r.potable.aplica && r.potable.recomendaciones, r.eyectoras.aplica && r.eyectoras.recomendaciones, r.rci.aplica && r.rci.recomendaciones]
       .filter(Boolean).join(' | ');
     upsert('Reportes', {
@@ -154,8 +174,9 @@ const ACCIONES = {
       actividad: r.actividad, estado: r.estado, realiza: r.cierre.realiza, recibe: r.cierre.recibe, frecuencia: r.cierre.frecuencia,
       recomendaciones: rec, pdf: pdfUrl, carpeta: folder.getUrl(), subido_por: user.nombre, actualizado: new Date().toISOString(),
       pdf_id: pdfId, carpeta_id: folder.getId(), datos: JSON.stringify(r),
+      correo_id: envio.correo_id, correo_para: envio.correo_para, correo_enviado: envio.correo_enviado,
     });
-    return { pdf: pdfUrl, carpeta: folder.getUrl(), fotos: fotos };
+    return { pdf: pdfUrl, carpeta: folder.getUrl(), fotos: fotos, correo: correo };
   }),
 
   // Ideas de mejora escritas desde la app. Se ignoran repetidas (mismo id).
@@ -222,6 +243,46 @@ const ACCIONES = {
 };
 
 // ---------- Utilidades ----------
+// Pide al script de waterproofsas@gmail.com que envíe el PDF del reporte (ver Correo.gs).
+function enviarCorreo(r, pdfId, envio) {
+  const url = getConfig('correo_url'), secreto = getConfig('correo_secreto');
+  if (!url || !secreto) throw new Error('El envío de correo aún no está configurado');
+  const para = String(envio.para || '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (!para.length || para.length > 5 || !para.every((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x))) throw new Error('Correo del cliente no válido');
+  if (!pdfId) throw new Error('El reporte no tiene PDF');
+  const payload = JSON.stringify({
+    secreto: secreto, id: envio.id, para: para.join(','),
+    asunto: 'Reporte de mantenimiento Nº ' + r.numero + ' - ' + r.cliente.nombre,
+    cuerpo: 'Buen día.\n\nAdjuntamos el reporte de mantenimiento Nº ' + r.numero + ' de ' + r.cliente.nombre +
+      ', realizado el ' + r.fecha.split('-').reverse().join('/') + '.\n\nCordialmente,\nWater Proof System SAS',
+    pdfNombre: 'Reporte_' + r.numero + '.pdf',
+    pdf: Utilities.base64Encode(DriveApp.getFileById(pdfId).getBlob().getBytes()),
+  });
+  // Google a veces devuelve una página de error en vez del resultado: se reintenta.
+  let ultimo = 'El servicio de correo no respondió';
+  for (let i = 0; i < 3; i++) {
+    const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'text/plain', payload: payload, muteHttpExceptions: true });
+    try {
+      const out = JSON.parse(res.getContentText());
+      if (out.ok) return;
+      throw new Error(out.error || ultimo);
+    } catch (err) {
+      if (!(err instanceof SyntaxError)) throw err;
+    }
+    Utilities.sleep(1500 * (i + 1));
+  }
+  throw new Error(ultimo);
+}
+
+// Agrega al final las columnas nuevas de una pestaña que ya existía.
+function asegurarColumnas(name) {
+  const sh = sheet(name);
+  const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  COLS[name].filter((k) => head.indexOf(k) < 0).forEach((k) => {
+    sh.getRange(1, sh.getLastColumn() + 1).setValue(k).setFontWeight('bold').setBackground('#dde7f4');
+  });
+}
+
 function siguienteCertificado() {
   const sh = sheet('Certificados');
   if (!sh) return null;
