@@ -2,7 +2,7 @@
 // Con señal siempre pide la versión más reciente (y la guarda); sin señal, o si
 // la red no responde a tiempo, usa la copia guardada. Así no se mezclan versiones.
 // Al publicar cambios, subir la versión de CACHE.
-const CACHE = 'wps-reportes-v0.10.0';
+const CACHE = 'wps-reportes-v0.11.0';
 const ASSETS = [
   './',
   './index.html',
@@ -41,6 +41,8 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   // El generador de certificados es una página aparte: no la sirve este service worker.
   if (new URL(req.url).pathname.includes('/certificados/')) return;
+  // La pantalla de conexión del correo tampoco: debe abrir aunque no haya sesión.
+  if (new URL(req.url).pathname.endsWith('/conectar.html')) return;
   const key = req.mode === 'navigate' ? './index.html' : req;
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);

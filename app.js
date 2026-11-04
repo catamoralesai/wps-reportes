@@ -3,7 +3,7 @@
 // Todo se guarda primero en el teléfono (IndexedDB), así la app funciona sin internet;
 // sync.js sube los datos a la hoja de Google cuando hay señal.
 
-const APP_VERSION = '0.10.0';
+const APP_VERSION = '0.11.0';
 // Listas definidas con el Director Técnico (oct 2026).
 const ESTADOS = ['OK', 'Programar mtto', 'Reparar', 'N/A'];
 const ESTADOS_ANTIGUOS = { Revisar: 'Programar mtto', Falla: 'Reparar' };
@@ -838,6 +838,13 @@ async function renderSettings() {
       <div id="syncSlot">${await syncChip()}</div>
       <button class="btn ghost block" data-act="logout">Cerrar sesión</button>
     </div></section>` : ''}
+    ${ONLINE_MODE && esOficina() ? `<section class="card"><div class="card-h"><h2>Correo de la empresa</h2></div><div class="card-b">
+      <p id="correoEstado" style="margin:0 0 12px;font-size:14px;color:var(--muted)">Revisando conexión…</p>
+      <div class="btn-row">
+        <button class="btn primary" data-act="correoConectar">Conectar correo</button>
+        <button class="btn ghost" data-act="correoEnlace">Enviar enlace</button>
+      </div>
+    </div></section>` : ''}
     <section class="card"><div class="card-h"><h2>Operario</h2></div><div class="card-b">
       <div class="grid2">
         <label class="fld full"><span>Nombre del operario</span><input data-set="operario" value="${esc(s.operario)}"></label>
@@ -855,6 +862,7 @@ async function renderSettings() {
       </div>
     </div></section>
   </main>`;
+  if (ONLINE_MODE && esOficina()) loadCorreoEstado();
   document.getElementById('firmarTec').onclick = () => openSignature('Firma del operario', async (v) => {
     s.firmaTecnico = v; await saveSettings(s); toast('Firma guardada'); renderSettings();
   });
@@ -863,6 +871,18 @@ async function renderSettings() {
     s[k] = k === 'siguienteNumero' ? Number(el.value.replace(/\D/g, '')) || DEFAULT_SETTINGS.siguienteNumero : el.value;
     await saveSettings(s);
   }));
+}
+
+async function loadCorreoEstado() {
+  const el = document.getElementById('correoEstado');
+  try {
+    const c = await api('estadoCorreo');
+    if (!document.body.contains(el)) return;
+    el.textContent = c.conectado ? `✓ Conectado: los reportes salen de ${c.cuenta}.`
+      : `${c.error ? `${c.error}. ` : ''}Sin conectar: la dueña de ${c.cuenta} debe autorizarlo una vez, desde su celular.`;
+  } catch (err) {
+    if (document.body.contains(el)) el.textContent = navigator.onLine ? `No se pudo revisar: ${err.message}` : 'Sin internet.';
+  }
 }
 
 async function exportBackup() {
@@ -1087,6 +1107,19 @@ app.addEventListener('click', async (e) => {
     case 'sugerencia':
       openSuggestion();
       break;
+    case 'correoConectar':
+    case 'correoEnlace': {
+      try {
+        const url = await api('enlaceCorreo');
+        if (act === 'correoConectar') { location.href = url; break; }
+        const texto = 'Abre este enlace en tu celular y elige waterproofsas@gmail.com para que los reportes salgan de ese correo. Vence en 6 horas.';
+        if (navigator.share) await navigator.share({ title: 'Conectar correo', text: `${texto}\n\n${url}` });
+        else { await navigator.clipboard.writeText(`${texto}\n\n${url}`); toast('Enlace copiado: pégalo en WhatsApp'); }
+      } catch (err) {
+        if (err.name !== 'AbortError') toast(`No se pudo: ${err.message}`, 4000);
+      }
+      break;
+    }
     case 'sync':
       syncAll({ avisar: true });
       break;

@@ -62,6 +62,7 @@ function doGet() {
 function doPost(e) {
   try {
     const req = JSON.parse(e.postData.contents);
+    if (req.accion === 'conectarCorreo') return json({ ok: true, data: conectarCorreo(req) });
     const user = auth(req.codigo);
     if (!user) throw new Error('Código de acceso no válido');
     const fn = ACCIONES[req.accion];
@@ -179,6 +180,23 @@ const ACCIONES = {
     return { pdf: pdfUrl, carpeta: folder.getUrl(), fotos: fotos, correo: correo };
   }),
 
+  // Correo de la empresa: estado de la conexión y enlace para autorizarla.
+  estadoCorreo: () => {
+    const p = propiedades();
+    return { cuenta: CUENTA_CORREO, conectado: !!p.getProperty('OAUTH_REFRESH'), fecha: p.getProperty('OAUTH_FECHA') || '', error: p.getProperty('OAUTH_ERROR') || '' };
+  },
+
+  enlaceCorreo: (req, user) => {
+    if (ROLES_OFICINA.indexOf(user.rol) < 0) throw new Error('Solo la oficina puede conectar el correo');
+    const clientId = propiedades().getProperty('OAUTH_CLIENT_ID');
+    if (!clientId) throw new Error('Falta terminar la configuración en Google');
+    const state = Utilities.getUuid();
+    CacheService.getScriptCache().put('oauth:' + state, user.nombre, 21600);
+    const q = { client_id: clientId, redirect_uri: OAUTH_REDIRECT, response_type: 'code', scope: OAUTH_SCOPES,
+      access_type: 'offline', prompt: 'consent', login_hint: CUENTA_CORREO, state: state };
+    return 'https://accounts.google.com/o/oauth2/v2/auth?' + Object.keys(q).map((k) => k + '=' + encodeURIComponent(q[k])).join('&');
+  },
+
   // Ideas de mejora escritas desde la app. Se ignoran repetidas (mismo id).
   sugerencia: (req, user) => withLock(() => {
     const texto = String(req.texto || '').trim().slice(0, 3000);
@@ -243,35 +261,118 @@ const ACCIONES = {
 };
 
 // ---------- Utilidades ----------
-// Pide al script de waterproofsas@gmail.com que envíe el PDF del reporte (ver Correo.gs).
+// ---------- Correo de la empresa ----------
+// Los reportes salen de CUENTA_CORREO por la API de Gmail. Nadie guarda su contraseña:
+// la dueña de la cuenta autoriza una vez en Google (pantalla conectar.html) y aquí solo
+// queda un permiso revocable, en las propiedades privadas del script.
+const CUENTA_CORREO = 'waterproofsas@gmail.com';
+const OAUTH_REDIRECT = 'https://catamoralesai.github.io/wps-reportes/conectar.html';
+const OAUTH_SCOPES = 'openid email https://www.googleapis.com/auth/gmail.send';
+const propiedades = () => PropertiesService.getScriptProperties();
+
+function postToken(datos) {
+  const res = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', { method: 'post', payload: datos, muteHttpExceptions: true });
+  return { codigo: res.getResponseCode(), out: JSON.parse(res.getContentText()) };
+}
+
+// Canjea el código que Google entrega al autorizar (no lleva código de acceso de la app:
+// lo protege el `state` de un solo uso creado por enlaceCorreo).
+function conectarCorreo(req) {
+  const cache = CacheService.getScriptCache();
+  if (cache.get('oauthok:' + req.state)) return { cuenta: CUENTA_CORREO }; // reintento de una conexión ya hecha
+  if (!req.state || !cache.get('oauth:' + req.state)) throw new Error('El enlace ya venció. Pida uno nuevo.');
+  const props = propiedades();
+  const { codigo, out } = postToken({
+    code: req.code, client_id: props.getProperty('OAUTH_CLIENT_ID'), client_secret: props.getProperty('OAUTH_CLIENT_SECRET'),
+    redirect_uri: OAUTH_REDIRECT, grant_type: 'authorization_code',
+  });
+  if (codigo !== 200) throw new Error('Google no aceptó la autorización: ' + (out.error_description || out.error));
+  let payload = out.id_token.split('.')[1];
+  payload += '='.repeat((4 - payload.length % 4) % 4);
+  const cuenta = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(payload)).getDataAsString('UTF-8')).email;
+  if (String(cuenta).toLowerCase() !== CUENTA_CORREO) throw new Error('Debe elegir la cuenta ' + CUENTA_CORREO + ', no ' + cuenta);
+  if (!out.refresh_token) throw new Error('Google no entregó el permiso. Intente de nuevo.');
+  props.setProperties({ OAUTH_REFRESH: out.refresh_token, OAUTH_FECHA: new Date().toISOString(), OAUTH_ERROR: '' });
+  cache.remove('oauth:' + req.state);
+  cache.put('oauthok:' + req.state, '1', 3600);
+  cache.remove('gmail_token');
+  return { cuenta: cuenta };
+}
+
+function tokenGmail() {
+  const cache = CacheService.getScriptCache();
+  const guardado = cache.get('gmail_token');
+  if (guardado) return guardado;
+  const props = propiedades();
+  const refresh = props.getProperty('OAUTH_REFRESH');
+  if (!refresh) throw new Error('Falta conectar el correo de la empresa (Ajustes > Correo de la empresa)');
+  const { codigo, out } = postToken({
+    refresh_token: refresh, client_id: props.getProperty('OAUTH_CLIENT_ID'), client_secret: props.getProperty('OAUTH_CLIENT_SECRET'),
+    grant_type: 'refresh_token',
+  });
+  if (codigo !== 200) {
+    // invalid_grant: se cambió la contraseña o se revocó el permiso.
+    if (out.error === 'invalid_grant') {
+      props.setProperty('OAUTH_ERROR', 'Google retiró el permiso');
+      props.deleteProperty('OAUTH_REFRESH');
+      throw new Error('Hay que volver a conectar el correo de la empresa (Ajustes > Correo de la empresa)');
+    }
+    throw new Error('Google no entregó acceso al correo: ' + (out.error_description || out.error));
+  }
+  cache.put('gmail_token', out.access_token, Math.max(60, (out.expires_in || 3600) - 300));
+  return out.access_token;
+}
+
+const asuntoMime = (t) => '=?UTF-8?B?' + Utilities.base64Encode(t, Utilities.Charset.UTF_8) + '?=';
+const lineas76 = (b64) => b64.replace(/.{76}/g, '$&\r\n');
+
+// Arma el mensaje con el PDF adjunto.
+function mensajeMime(para, asunto, cuerpo, pdfBytes, pdfNombre) {
+  const limite = 'wps' + Utilities.getUuid().replace(/-/g, '');
+  return [
+    'From: ' + asuntoMime('Water Proof System SAS') + ' <' + CUENTA_CORREO + '>',
+    'To: ' + para,
+    'Subject: ' + asuntoMime(asunto),
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="' + limite + '"',
+    '',
+    '--' + limite,
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    lineas76(Utilities.base64Encode(cuerpo, Utilities.Charset.UTF_8)),
+    '--' + limite,
+    'Content-Type: application/pdf; name="' + pdfNombre + '"',
+    'Content-Disposition: attachment; filename="' + pdfNombre + '"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    lineas76(Utilities.base64Encode(pdfBytes)),
+    '--' + limite + '--',
+    '',
+  ].join('\r\n');
+}
+
+function enviarGmail(mime) {
+  const res = UrlFetchApp.fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media', {
+    method: 'post', contentType: 'message/rfc822', payload: mime,
+    headers: { Authorization: 'Bearer ' + tokenGmail() }, muteHttpExceptions: true,
+  });
+  const codigo = res.getResponseCode();
+  if (codigo === 401) CacheService.getScriptCache().remove('gmail_token');
+  if (codigo >= 200 && codigo < 300) return;
+  let detalle = '';
+  try { detalle = JSON.parse(res.getContentText()).error.message; } catch (e) { /* respuesta no JSON */ }
+  throw new Error('Gmail rechazó el envío (' + codigo + '): ' + detalle);
+}
+
 function enviarCorreo(r, pdfId, envio) {
-  const url = getConfig('correo_url'), secreto = getConfig('correo_secreto');
-  if (!url || !secreto) throw new Error('El envío de correo aún no está configurado');
   const para = String(envio.para || '').split(',').map((x) => x.trim()).filter(Boolean);
   if (!para.length || para.length > 5 || !para.every((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x))) throw new Error('Correo del cliente no válido');
   if (!pdfId) throw new Error('El reporte no tiene PDF');
-  const payload = JSON.stringify({
-    secreto: secreto, id: envio.id, para: para.join(','),
-    asunto: 'Reporte de mantenimiento Nº ' + r.numero + ' - ' + r.cliente.nombre,
-    cuerpo: 'Buen día.\n\nAdjuntamos el reporte de mantenimiento Nº ' + r.numero + ' de ' + r.cliente.nombre +
-      ', realizado el ' + r.fecha.split('-').reverse().join('/') + '.\n\nCordialmente,\nWater Proof System SAS',
-    pdfNombre: 'Reporte_' + r.numero + '.pdf',
-    pdf: Utilities.base64Encode(DriveApp.getFileById(pdfId).getBlob().getBytes()),
-  });
-  // Google a veces devuelve una página de error en vez del resultado: se reintenta.
-  let ultimo = 'El servicio de correo no respondió';
-  for (let i = 0; i < 3; i++) {
-    const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'text/plain', payload: payload, muteHttpExceptions: true });
-    try {
-      const out = JSON.parse(res.getContentText());
-      if (out.ok) return;
-      throw new Error(out.error || ultimo);
-    } catch (err) {
-      if (!(err instanceof SyntaxError)) throw err;
-    }
-    Utilities.sleep(1500 * (i + 1));
-  }
-  throw new Error(ultimo);
+  const cuerpo = 'Buen día.\n\nAdjuntamos el reporte de mantenimiento Nº ' + r.numero + ' de ' + r.cliente.nombre +
+    ', realizado el ' + r.fecha.split('-').reverse().join('/') + '.\n\nCordialmente,\nWater Proof System SAS';
+  const asunto = 'Reporte de mantenimiento Nº ' + r.numero + ' - ' + r.cliente.nombre;
+  enviarGmail(mensajeMime(para.join(', '), asunto, cuerpo, DriveApp.getFileById(pdfId).getBlob().getBytes(), 'Reporte_' + r.numero + '.pdf'));
 }
 
 // Agrega al final las columnas nuevas de una pestaña que ya existía.

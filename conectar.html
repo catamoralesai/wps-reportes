@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f4e9c">
+  <meta name="robots" content="noindex">
+  <title>Conectar correo · Reportes WPS</title>
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="login">
+    <img src="icons/logo.png" alt="Water Proof System SAS">
+    <h1 id="titulo">Conectando el correo…</h1>
+    <p id="detalle">Un momento, por favor.</p>
+  </main>
+  <script src="config.js"></script>
+  <script>
+  'use strict';
+  // Google vuelve aquí después de autorizar. No necesita sesión en la app:
+  // el servidor valida el `state` de un solo uso.
+  (async function () {
+    const q = new URLSearchParams(location.search);
+    const code = q.get('code'), state = q.get('state'), negado = q.get('error');
+    history.replaceState(null, '', location.pathname); // el código no queda en el historial
+    const mostrar = (t, d) => { document.getElementById('titulo').textContent = t; document.getElementById('detalle').textContent = d; };
+    if (negado) return mostrar('No se conectó', 'Se canceló la autorización. Puede intentarlo de nuevo con el mismo enlace.');
+    if (!code || !state) return mostrar('Enlace incompleto', 'Abra de nuevo el enlace que le enviaron.');
+    const body = JSON.stringify({ accion: 'conectarCorreo', code, state });
+    for (let intento = 1; intento <= 3; intento++) {
+      try {
+        const res = await fetch(window.WPS_CONFIG.apiUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body });
+        const out = JSON.parse(await res.text());
+        if (out.ok) return mostrar('¡Listo! ✓', `Los reportes ya salen de ${out.data.cuenta}. Puede cerrar esta página.`);
+        return mostrar('No se pudo conectar', out.error);
+      } catch (err) {
+        await new Promise((r) => setTimeout(r, 1500 * intento));
+      }
+    }
+    mostrar('No se pudo conectar', 'Google no respondió. Revise su internet y abra de nuevo el enlace.');
+  })();
+  </script>
+</body>
+</html>
