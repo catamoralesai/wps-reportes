@@ -41,8 +41,8 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   // El generador de certificados es una página aparte: no la sirve este service worker.
   if (new URL(req.url).pathname.includes('/certificados/')) return;
-  // La pantalla de conexión del correo tampoco: debe abrir aunque no haya sesión.
-  if (new URL(req.url).pathname.endsWith('/conectar.html')) return;
+  // Tampoco la conexión del correo ni la privacidad: abren sin sesión.
+  if (/\/(conectar|privacidad)\.html$/.test(new URL(req.url).pathname)) return;
   const key = req.mode === 'navigate' ? './index.html' : req;
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
